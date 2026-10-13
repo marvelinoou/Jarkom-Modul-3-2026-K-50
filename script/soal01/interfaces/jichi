@@ -1,0 +1,30 @@
+auto lo
+iface lo inet loopback
+
+# WAN -> NAT1
+auto eth0
+iface eth0 inet dhcp
+
+# Network 1 (DMZ)
+auto eth1
+iface eth1 inet static
+    address 192.236.1.1
+    netmask 255.255.255.0
+
+# Network 2 (Divisi A)
+auto eth2
+iface eth2 inet static
+    address 192.236.2.1
+    netmask 255.255.255.0
+
+# Network 3 (Divisi B)
+auto eth3
+iface eth3 inet static
+    address 192.236.3.1
+    netmask 255.255.255.0
+
+# Network 4 (Data Center)
+auto eth4
+iface eth4 inet static
+    address 192.236.4.1
+    netmask 255.255.255.0

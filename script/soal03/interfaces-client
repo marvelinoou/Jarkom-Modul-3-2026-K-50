@@ -1,0 +1,7 @@
+auto lo
+iface lo inet loopback
+
+# -O search: minta DHCP option 119 (domain-search) ke server
+auto eth0
+iface eth0 inet dhcp
+    udhcpc_opts -O search
