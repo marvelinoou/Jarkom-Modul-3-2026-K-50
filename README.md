@@ -811,35 +811,1427 @@ Setelah restart, DHCP Server dan DHCP Relay hidup sendiri, setiap client menerim
 ### Soal 11:
 > Utahime dan Shoko ditugaskan membangun sistem penamaan domain resmi agar seluruh pos tidak perlu menghafal alamat IP mentah. Konfigurasikan BIND9 pada utahime sebagai DNS Master dan shoko sebagai DNS Slave untuk mengelola domain jujutsu.<xxxx>.com. Atur SOA record, NS delegasi untuk kedua server, dan terapkan allow-transfer dari Master ke Slave. Pastikan file zona berhasil tersinkronisasi otomatis ke shoko saat nomor serial di utahime dinaikkan, lalu buktikan dengan melakukan query dig ke kedua server dari salah satu client.
 
+#### Cek kesiapan node **utahime** dan **shoko**
+
+```bash
+named -v
+ip -br a show eth0
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a5f9137e-0fe2-41e7-8bcc-17635000dbdb" />
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/e5ff1f02-e7ed-4f93-8ef3-3be82bc87590" />
+
+#### Konfigurasi DNS Master **utahime**
+
+```bash
+mkdir -p /etc/bind/zones
+
+cat > /etc/bind/named.conf.options << 'EOF'
+options {
+    directory "/var/cache/bind";
+    listen-on { any; };
+    listen-on-v6 { none; };
+    allow-query { any; };
+    recursion yes;
+    allow-recursion { 127.0.0.1; 192.236.0.0/16; };
+    dnssec-validation no;
+};
+EOF
+
+cat > /etc/bind/named.conf.local << 'EOF'
+zone "jujutsu.K50.com" {
+    type primary;
+    file "/etc/bind/zones/db.jujutsu.K50.com";
+    notify yes;
+    also-notify { 192.236.1.3; };
+    allow-transfer { 192.236.1.3; };
+};
+EOF
+
+cat > /etc/bind/zones/db.jujutsu.K50.com << 'EOF'
+$TTL 3600
+@       IN      SOA     utahime.jujutsu.K50.com. admin.jujutsu.K50.com. (
+                        2026101401
+                        3600
+                        900
+                        1209600
+                        300 )
+
+@       IN      NS      utahime.jujutsu.K50.com.
+@       IN      NS      shoko.jujutsu.K50.com.
+
+utahime IN      A       192.236.1.2
+shoko   IN      A       192.236.1.3
+EOF
+
+chown -R root:bind /etc/bind/zones
+chmod 755 /etc/bind/zones
+chmod 644 /etc/bind/zones/db.jujutsu.K50.com
+
+named-checkconf && echo "named.conf OK"
+named-checkzone jujutsu.K50.com /etc/bind/zones/db.jujutsu.K50.com
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/28adff9d-4edc-4fa9-bd93-7a651c21c7b8" />
+
+#### Jalankan BIND di utahime
+
+```bash
+service named restart
+sleep 2
+pgrep -a named
+ss -ulnp | grep :53
+ss -tlnp | grep :53
+dig @127.0.0.1 jujutsu.K50.com SOA +short
+```
+
+<img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/cd637e08-4deb-4f8f-8b7d-744cf5ebd807" />
+
+#### Konfigurasi DNS Slave **shoko**
+
+```bash
+cat > /etc/bind/named.conf.options << 'EOF'
+options {
+    directory "/var/cache/bind";
+    listen-on { any; };
+    listen-on-v6 { none; };
+    allow-query { any; };
+    recursion yes;
+    allow-recursion { 127.0.0.1; 192.236.0.0/16; };
+    dnssec-validation no;
+    masterfile-format text;
+};
+EOF
+
+cat > /etc/bind/named.conf.local << 'EOF'
+zone "jujutsu.K50.com" {
+    type secondary;
+    file "/var/cache/bind/db.jujutsu.K50.com";
+    primaries { 192.236.1.2; };
+    allow-transfer { none; };
+};
+EOF
+
+chown -R bind:bind /var/cache/bind
+named-checkconf && echo "named.conf OK"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/89db6d1a-6211-4208-9679-176e549b2f64" />
+
+#### Jalankan BIND di shoko dan cek hasil transfer
+
+```bash
+service named restart
+sleep 5
+pgrep -a named
+ls -l /var/cache/bind/
+dig @127.0.0.1 jujutsu.K50.com SOA +short
+cat /var/cache/bind/db.jujutsu.K50.com
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/bf39223e-3464-4d85-bce2-8e12e4a1f859" />
+
+#### Uji dari client (kondisi awal) **itadori**
+
+```bash
+dig @192.236.1.2 jujutsu.K50.com SOA +short
+dig @192.236.1.3 jujutsu.K50.com SOA +short
+dig @192.236.1.2 jujutsu.K50.com NS +short
+dig @192.236.1.3 jujutsu.K50.com NS +short
+dig @192.236.1.2 jujutsu.K50.com SOA | grep flags
+dig @192.236.1.3 jujutsu.K50.com SOA | grep flags
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/3b4ac2d2-bea9-4736-83c8-eabf18f4c3ef" />
+
+#### Uji sinkronisasi otomatis (naikkan serial di Master) **utahime**
+
+```bash
+cat >> /etc/bind/zones/db.jujutsu.K50.com << 'EOF'
+gojo    IN      A       192.236.1.4
+EOF
+
+sed -i 's/2026101401/2026101402/' /etc/bind/zones/db.jujutsu.K50.com
+named-checkzone jujutsu.K50.com /etc/bind/zones/db.jujutsu.K50.com
+rndc reload jujutsu.K50.com
+sleep 3
+dig @127.0.0.1 jujutsu.K50.com SOA +short
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/50bfa346-ffbb-4509-8c11-9542b27e6168" />
+
+#### Selanjutnya cek di slave **shoko**
+
+```bash
+sleep 3
+dig @127.0.0.1 jujutsu.K50.com SOA +short
+dig @127.0.0.1 gojo.jujutsu.K50.com +short
+grep gojo /var/cache/bind/db.jujutsu.K50.com
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/ea590063-dd07-4ec3-bb84-09e30c5a0f15" />
+
+Terakhir, bukti dari client **itadori**
+
+```bash
+for s in 192.236.1.2 192.236.1.3; do echo -n "$s -> serial "; dig +short SOA jujutsu.K50.com @$s | awk '{print $3}'; done
+dig @192.236.1.2 gojo.jujutsu.K50.com +short
+dig @192.236.1.3 gojo.jujutsu.K50.com +short
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a6eb04aa-1d3e-479a-911a-982b10e31c42" />
+
+#### Uji pembatasan zone transfer
+
+shoko *harus diizinkan*
+
+```bash
+dig AXFR jujutsu.K50.com @192.236.1.2
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/b2a8fd0e-7dfa-45cd-9e61-ded53a5f7b6b" />
+
+itadori *harus ditolak*
+
+```bash
+dig AXFR jujutsu.K50.com @192.236.1.2
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/0d6af9dc-fccf-4cd3-977e-f90586358637" />
+
+#### Autostart BIND saat node restart **utahime** dan **shoko**
+
+```bash
+mkdir -p /root/boot.d
+echo 'service named start' > /root/boot.d/named.sh
+cat /root/boot.d/named.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/d63f7e14-2b7b-4a8c-a40d-ca9888f1fd09" />
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/903ef6e8-a1bc-4487-baba-1da9d76deb8a" />
+
 ----
 
 ### Soal 12:
 > Peta domain harus memetakan pintu masuk utama dan tetap bisa mencari alamat di luar kawasan Shibuya. Pada utahime, buat A record jujutsu.<xxxx>.com yang mengarah ke gojo, serta CNAME www yang merujuk ke domain utama tersebut. Buat pula Reverse DNS (zona PTR) untuk melacak IP gojo kembali ke domain resminya, dan aktifkan fitur DNS Forwarder pada BIND9 mengarah ke IP gateway internet (192.168.122.1). Uji dari client dengan dig untuk mengecek CNAME, PTR, dan buktikan client tetap bisa melakukan ping ke domain internet seperti google.com.
+
+#### Perbarui zona utama
+
+**utahime**
+
+```bash
+cat > /etc/bind/zones/db.jujutsu.K50.com << 'EOF'
+$TTL 3600
+@       IN      SOA     utahime.jujutsu.K50.com. admin.jujutsu.K50.com. (
+                        2026101403
+                        3600
+                        900
+                        1209600
+                        300 )
+
+@       IN      NS      utahime.jujutsu.K50.com.
+@       IN      NS      shoko.jujutsu.K50.com.
+
+@       IN      A       192.236.1.4
+www     IN      CNAME   jujutsu.K50.com.
+
+utahime IN      A       192.236.1.2
+shoko   IN      A       192.236.1.3
+gojo    IN      A       192.236.1.4
+EOF
+
+named-checkzone jujutsu.K50.com /etc/bind/zones/db.jujutsu.K50.com
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/61c8e2ae-03e6-4cd0-9b21-36de85878776" />
+
+#### Buat reverse zone
+
+**utahime**
+
+```bash
+cat > /etc/bind/named.conf.local << 'EOF'
+zone "jujutsu.K50.com" {
+    type primary;
+    file "/etc/bind/zones/db.jujutsu.K50.com";
+    notify yes;
+    also-notify { 192.236.1.3; };
+    allow-transfer { 192.236.1.3; };
+};
+
+zone "1.236.192.in-addr.arpa" {
+    type primary;
+    file "/etc/bind/zones/db.1.236.192";
+};
+EOF
+
+cat > /etc/bind/zones/db.1.236.192 << 'EOF'
+$TTL 3600
+@       IN      SOA     utahime.jujutsu.K50.com. admin.jujutsu.K50.com. (
+                        2026101401
+                        3600
+                        900
+                        1209600
+                        300 )
+
+@       IN      NS      utahime.jujutsu.K50.com.
+
+4       IN      PTR     jujutsu.K50.com.
+EOF
+
+chown -R root:bind /etc/bind/zones
+chmod 644 /etc/bind/zones/db.1.236.192
+
+named-checkzone 1.236.192.in-addr.arpa /etc/bind/zones/db.1.236.192
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/89c41832-ad94-42b5-a589-cd6f50fcff0f" />
+
+#### Aktifkan DNS Forwarder
+
+**utahime**
+
+```bash
+cat > /etc/bind/named.conf.options << 'EOF'
+options {
+    directory "/var/cache/bind";
+    listen-on { any; };
+    listen-on-v6 { none; };
+    allow-query { any; };
+    recursion yes;
+    allow-recursion { 127.0.0.1; 192.236.0.0/16; };
+    forwarders { 192.168.122.1; };
+    forward first;
+    dnssec-validation no;
+};
+EOF
+
+named-checkconf && echo "named.conf OK"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/97d31d3e-c973-4135-8904-f15a137efc22" />
+
+#### Restart BIND dan cek lokal
+
+**utahime**
+
+```bash
+service named restart
+sleep 3
+dig @127.0.0.1 jujutsu.K50.com SOA +short
+dig @127.0.0.1 jujutsu.K50.com +short
+dig @127.0.0.1 www.jujutsu.K50.com +noall +answer
+dig @127.0.0.1 -x 192.236.1.4 +noall +answer
+dig @127.0.0.1 google.com +short
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/81c06bcc-d3e4-41ea-9d5e-4f58c5d7d8f1" />
+
+#### Aktifkan forwarder di Slave dan pastikan zona tersinkron
+
+**shoko**
+
+```bash
+cat > /etc/bind/named.conf.options << 'EOF'
+options {
+    directory "/var/cache/bind";
+    listen-on { any; };
+    listen-on-v6 { none; };
+    allow-query { any; };
+    recursion yes;
+    allow-recursion { 127.0.0.1; 192.236.0.0/16; };
+    forwarders { 192.168.122.1; };
+    forward first;
+    dnssec-validation no;
+    masterfile-format text;
+};
+EOF
+
+named-checkconf && echo "named.conf OK"
+service named restart
+sleep 5
+dig @127.0.0.1 jujutsu.K50.com SOA +short
+dig @127.0.0.1 www.jujutsu.K50.com +noall +answer
+dig @127.0.0.1 google.com +short
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/18feb426-59b8-464c-8c33-99e1d1c468f9" />
+
+#### Uji dari client
+
+**itadori**
+
+```bash
+dig @192.236.1.2 jujutsu.K50.com +short
+dig @192.236.1.3 jujutsu.K50.com +short
+dig www.jujutsu.K50.com +noall +answer
+dig -x 192.236.1.4 +noall +answer
+dig -x 192.236.1.4 | grep flags
+ping -c 2 google.com
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/665f8d89-ad50-4e0d-b93b-52421d24ff6d" />
+
+#### Uji dari client lain
+
+**kusakabe**
+
+```bash
+dig www.jujutsu.K50.com +short
+dig -x 192.236.1.4 +short
+ping -c 2 google.com
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/ba93ca5f-91d7-4362-b325-af7d4d5b73ef" />
 
 ----
 
 ### Soal 13:
 > Kepala Sekolah Yaga dan Inumaki mendirikan database terpusat yang redundan agar log aktivitas kutukan tetap aman tersimpan. Konfigurasikan MariaDB pada yaga sebagai DB-Master dan inumaki sebagai DB-Slave. Buat database db_shibuya_<xxxx> beserta tabel request_logs di Master, aktifkan binary logging (log-bin, server-id), lalu hubungkan inumaki sebagai Slave yang menyalin data secara realtime dengan CHANGE MASTER TO. Berikan hak akses remote bagi seluruh node di Network 4, lalu buktikan replikasi berhasil dengan memasukkan data baru di Master dan memeriksa hasilnya di Slave.
 
+#### Cek kesiapan node
+
+**yaga** dan **inumaki**
+
+```bash
+mariadbd --version
+ip -br a show eth0
+ls /var/lib/mysql | head -5
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/6df35142-28fe-4fcd-af1a-928fc023f0c1" />
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a5e43b39-b3d7-4435-b876-caa1db648718" />
+
+#### Konfigurasi dan jalankan Master
+
+**yaga**
+
+```bash
+cat > /etc/mysql/mariadb.conf.d/99-replication.cnf << 'EOF'
+[mysqld]
+bind-address = 0.0.0.0
+skip-name-resolve
+server-id = 1
+log_bin = /var/lib/mysql/mysql-bin
+EOF
+
+mkdir -p /run/mysqld
+chown mysql:mysql /run/mysqld
+service mariadb restart
+sleep 5
+pgrep -a mariadbd
+ss -tlnp | grep 3306
+mariadb -e "SHOW VARIABLES WHERE Variable_name IN ('server_id','log_bin');"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a4800998-c5a6-445e-a9f3-4271eeb9b91e" />
+
+#### Buat user replikasi
+
+**yaga**
+
+```bash
+mariadb -e "CREATE USER 'repl'@'192.236.4.21' IDENTIFIED BY 'replpass50'; GRANT REPLICATION SLAVE ON *.* TO 'repl'@'192.236.4.21'; FLUSH PRIVILEGES;"
+mariadb -t -e "SELECT user, host FROM mysql.user WHERE user='repl';"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/20c81938-5226-40ed-993a-e60d12b1e706" />
+
+#### Buat database, tabel, dan user remote Network 4
+
+**yaga**
+
+```bash
+mariadb << 'EOF'
+CREATE DATABASE db_shibuya_K50;
+USE db_shibuya_K50;
+CREATE TABLE request_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    worker VARCHAR(50) NOT NULL,
+    client_ip VARCHAR(45) DEFAULT NULL,
+    path VARCHAR(255) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE USER 'shibuya'@'192.236.4.%' IDENTIFIED BY 'shibuya50';
+GRANT ALL PRIVILEGES ON db_shibuya_K50.* TO 'shibuya'@'192.236.4.%';
+FLUSH PRIVILEGES;
+EOF
+
+mariadb -t -e "SHOW DATABASES LIKE 'db_shibuya%'; DESCRIBE db_shibuya_K50.request_logs;"
+mariadb -t -e "SELECT user, host FROM mysql.user WHERE user IN ('shibuya','repl');"
+```
+
+<img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/f0fb1ff6-a35e-4c12-ba8b-0a7fd84bf856" />
+
+#### Cek file binlog di Master
+
+**yaga**
+
+```bash
+mariadb -t -e "SHOW BINARY LOGS; SHOW MASTER STATUS;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/d0964509-f656-49cb-b20a-11b4b5f4c447" />
+
+#### Konfigurasi dan jalankan Slave
+
+**inumaki**
+
+```bash
+cat > /etc/mysql/mariadb.conf.d/99-replication.cnf << 'EOF'
+[mysqld]
+bind-address = 0.0.0.0
+skip-name-resolve
+server-id = 2
+relay_log = /var/lib/mysql/relay-bin
+read_only = 1
+EOF
+
+mkdir -p /run/mysqld
+chown mysql:mysql /run/mysqld
+service mariadb restart
+sleep 5
+pgrep -a mariadbd
+mariadb -e "SHOW VARIABLES WHERE Variable_name IN ('server_id','read_only');"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/86d010c1-b22d-44c1-9272-51d99df47635" />
+
+#### Hubungkan Slave ke Master
+
+**inumaki**
+
+```bash
+mariadb -e "CHANGE MASTER TO MASTER_HOST='192.236.4.20', MASTER_USER='repl', MASTER_PASSWORD='replpass50', MASTER_LOG_FILE='mysql-bin.000001', MASTER_LOG_POS=4; START SLAVE;"
+sleep 5
+mariadb -e "SHOW SLAVE STATUS\G" | egrep "Slave_IO_State|Master_Host|Master_Log_File|Read_Master_Log_Pos|Slave_IO_Running|Slave_SQL_Running|Seconds_Behind_Master|Last_IO_Error|Last_SQL_Error"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/33048fdc-b997-429f-bf5f-69d1253306eb" />
+
+#### Cek DB, tabel, dan user sudah tereplikasi
+
+**inumaki**
+
+```bash
+mariadb -t -e "SHOW DATABASES LIKE 'db_shibuya%'; DESCRIBE db_shibuya_K50.request_logs;"
+mariadb -t -e "SELECT user, host FROM mysql.user WHERE user IN ('shibuya','repl');"
+```
+
+<img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/783a81e7-c67f-46a5-804a-fb6e6b7ca2f4" />
+
+#### Bukti replikasi, insert di Master, cek di Slave
+
+**yaga**
+
+```bash
+mariadb -e "INSERT INTO db_shibuya_K50.request_logs (worker, client_ip, path) VALUES ('uji-replikasi-1','192.236.2.10','/tes1'),('uji-replikasi-2','192.236.3.10','/tes2');"
+mariadb -t -e "SELECT * FROM db_shibuya_K50.request_logs;"
+mariadb -t -e "SHOW MASTER STATUS;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/9013d4ab-1c5c-4513-a15a-82b5e40e6bb3" />
+
+**inumaki**
+
+```bash
+sleep 2
+mariadb -t -e "SELECT * FROM db_shibuya_K50.request_logs;"
+mariadb -e "SHOW SLAVE STATUS\G" | egrep "Read_Master_Log_Pos|Exec_Master_Log_Pos|Seconds_Behind_Master"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/b22d31e4-b711-44f4-9bf3-effdf36cceeb" />
+
+#### Tes hak akses remote dari node Network 4
+
+**nanami**
+
+```bash
+mariadb -h 192.236.4.20 -u shibuya -pshibuya50 -e "SELECT worker, path FROM db_shibuya_K50.request_logs;"
+mariadb -h 192.236.4.21 -u shibuya -pshibuya50 -e "SELECT worker, path FROM db_shibuya_K50.request_logs;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/9d9e8145-b37d-4479-afbf-f2a9385ee4b7" />
+
+#### Autostart MariaDB saat node restart
+/run hilang tiap boot, jadi folder /run/mysqld harus dibuat ulang oleh script boot.
+
+**yaga** dan **inumaki**
+
+```bash
+mkdir -p /root/boot.d
+cat > /root/boot.d/mariadb.sh << 'EOF'
+mkdir -p /run/mysqld
+chown mysql:mysql /run/mysqld
+service mariadb start
+EOF
+cat /root/boot.d/mariadb.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/32b63bb9-8216-4129-9e8d-007bda59d723" />
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/2eb6508a-8641-4874-bbb9-36935496baf8" />
+
 ----
 
 ### Soal 14:
 > Para penyihir lapangan bersiaga di Data Center sebagai pekerja backend untuk memproses aplikasi. Pasang Nginx dan PHP-FPM pada maki dan panda untuk menyajikan web frontend yang menampilkan hostname masing-masing. Pada nanami, todo, dan kirara, siapkan layanan API yang mencatat log request ke database yaga. Konfigurasikan virtual host agar worker merespons domain layanan yang ditentukan. Batasi akses langsung dari klien ke worker, web worker hanya menerima trafik melalui jalur proxy web yang ditentukan, sedangkan worker API hanya menerima trafik melalui geto. Uji bahwa akses langsung dari klien ditolak, sementara akses melalui reverse proxy tetap berhasil.
+
+
+#### Worker frontend
+
+**maki** dan **panda**
+
+```bash
+cat > /root/setup-web.sh << 'SETUP_EOF'
+#!/bin/bash
+# /root/setup-web.sh - Worker frontend (maki, panda): nginx + php-fpm
+GOJO="192.236.1.4"
+PHPV=$(ls /usr/sbin/php-fpm[0-9]* 2>/dev/null | head -1 | sed 's/.*php-fpm//')
+[ -z "$PHPV" ] && { echo "php-fpm tidak ditemukan"; exit 1; }
+NODE=$(hostname)
+
+# 1. Halaman frontend (menampilkan hostname)
+mkdir -p /var/www/frontend
+cat > /var/www/frontend/index.php <<'PHPEOF'
+<?php
+echo "<h1>Jujutsu High - Frontend</h1>\n";
+echo "<p>Worker: " . htmlspecialchars(gethostname()) . "</p>\n";
+PHPEOF
+chown -R www-data:www-data /var/www/frontend
+
+# 2. Virtual host: hanya gojo yang boleh masuk
+rm -f /etc/nginx/sites-enabled/default
+cat > /etc/nginx/sites-available/jujutsu-frontend <<NGEOF
+server {
+    listen 80 default_server;
+    server_name jujutsu.K50.com www.jujutsu.K50.com;
+    root /var/www/frontend;
+    index index.php;
+
+    allow ${GOJO};
+    deny all;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+    location ~ \.php\$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php${PHPV}-fpm.sock;
+    }
+}
+NGEOF
+ln -sf /etc/nginx/sites-available/jujutsu-frontend /etc/nginx/sites-enabled/jujutsu-frontend
+
+# 3. Jalankan service
+mkdir -p /run/php
+service php${PHPV}-fpm restart
+nginx -t || exit 1
+service nginx restart
+
+# 4. Autostart saat boot (dipanggil init.sh lewat boot.d)
+mkdir -p /root/boot.d
+cat > /root/boot.d/web.sh <<BOOTEOF
+mkdir -p /run/php
+service php${PHPV}-fpm start
+service nginx start
+BOOTEOF
+
+# 5. Ringkasan
+sleep 2
+echo "===== HASIL $NODE ====="
+echo "hostname      : $NODE"
+echo "PHP-FPM versi : $PHPV"
+nginx -t 2>&1 | tail -2
+pgrep -a php-fpm | head -2
+ss -tlnp | grep ':80 '
+ls /run/php/
+echo -n "akses lokal (harus 403) : "; curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1/
+SETUP_EOF
+
+bash -n /root/setup-web.sh && echo "script OK" && bash /root/setup-web.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/4aa19301-2f8c-46ca-af53-858e5cebef4f" />
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/551f116d-7e84-4004-99d9-981a7fffd107" />
+
+#### Worker API
+
+**nanami**, **todo** dan **kirara**
+
+```bash
+cat > /root/setup-api.sh << 'SETUP_EOF'
+#!/bin/bash
+# /root/setup-api.sh - Worker API (nanami, todo, kirara): nginx + php-fpm + log ke yaga
+GETO="192.236.4.2"
+DBHOST="192.236.4.20"
+PHPV=$(ls /usr/sbin/php-fpm[0-9]* 2>/dev/null | head -1 | sed 's/.*php-fpm//')
+[ -z "$PHPV" ] && { echo "php-fpm tidak ditemukan"; exit 1; }
+NODE=$(hostname)
+
+# 1. Skrip API: catat request ke request_logs di yaga
+mkdir -p /var/www/api
+cat > /var/www/api/index.php <<'PHPEOF'
+<?php
+header('Content-Type: application/json');
+mysqli_report(MYSQLI_REPORT_OFF);
+
+$worker = gethostname();
+$client = $_SERVER['REMOTE_ADDR'] ?? '';
+$path   = $_SERVER['REQUEST_URI'] ?? '';
+
+$db = mysqli_init();
+$db->options(MYSQLI_OPT_CONNECT_TIMEOUT, 3);
+if (!@$db->real_connect('192.236.4.20', 'shibuya', 'shibuya50', 'db_shibuya_K50')) {
+    http_response_code(500);
+    echo json_encode(['status' => 'error', 'worker' => $worker, 'message' => 'koneksi database gagal']);
+    exit;
+}
+$stmt = $db->prepare('INSERT INTO request_logs (worker, client_ip, path) VALUES (?, ?, ?)');
+$stmt->bind_param('sss', $worker, $client, $path);
+if (!$stmt->execute()) {
+    http_response_code(500);
+    echo json_encode(['status' => 'error', 'worker' => $worker, 'message' => 'insert gagal']);
+    exit;
+}
+echo json_encode([
+    'status'    => 'ok',
+    'worker'    => $worker,
+    'client_ip' => $client,
+    'path'      => $path,
+    'log_id'    => $db->insert_id
+], JSON_UNESCAPED_SLASHES);
+PHPEOF
+chown -R www-data:www-data /var/www/api
+
+# 2. Virtual host: hanya geto yang boleh masuk
+rm -f /etc/nginx/sites-enabled/default
+cat > /etc/nginx/sites-available/jujutsu-api <<NGEOF
+server {
+    listen 80 default_server;
+    server_name jujutsu.K50.com www.jujutsu.K50.com;
+    root /var/www/api;
+
+    allow ${GETO};
+    deny all;
+
+    location /api {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /var/www/api/index.php;
+        fastcgi_pass unix:/run/php/php${PHPV}-fpm.sock;
+    }
+}
+NGEOF
+ln -sf /etc/nginx/sites-available/jujutsu-api /etc/nginx/sites-enabled/jujutsu-api
+
+# 3. Jalankan service
+mkdir -p /run/php
+service php${PHPV}-fpm restart
+nginx -t || exit 1
+service nginx restart
+
+# 4. Autostart saat boot
+mkdir -p /root/boot.d
+cat > /root/boot.d/api.sh <<BOOTEOF
+mkdir -p /run/php
+service php${PHPV}-fpm start
+service nginx start
+BOOTEOF
+
+# 5. Ringkasan
+sleep 2
+echo "===== HASIL $NODE ====="
+echo "hostname      : $NODE"
+echo "PHP-FPM versi : $PHPV"
+echo -n "ekstensi mysqli : "; php-fpm${PHPV} -m | grep -ci mysqli
+nginx -t 2>&1 | tail -2
+pgrep -a php-fpm | head -2
+ss -tlnp | grep ':80 '
+mariadb -h $DBHOST -u shibuya -pshibuya50 -N -e "SELECT COUNT(*) FROM db_shibuya_K50.request_logs" >/dev/null 2>&1 \
+    && echo "koneksi DB yaga : OK" || echo "koneksi DB yaga : GAGAL"
+echo -n "akses lokal /api (harus 403) : "; curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1/api
+SETUP_EOF
+
+bash -n /root/setup-api.sh && echo "script OK" && bash /root/setup-api.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/e9383bd7-4779-487b-a6cc-06202a03b19f" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/f72c2041-7f34-4048-88c3-c326ac4107f3" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/bf6027e6-cbf7-4520-ab17-e1a2e3b19537" />
+
+#### Uji akses lewat jalur proxy (yang diizinkan)
+
+**gojo, ke worker frontend**
+
+```bash
+for h in 192.236.4.3 192.236.4.4; do echo "== $h"; curl -s -H "Host: jujutsu.K50.com" http://$h/; done
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/049e6999-3272-4417-b2e8-1adfd14f82fc" />
+
+**geto, ke worker API**
+
+```bash
+for h in 192.236.4.5 192.236.4.6 192.236.4.7; do echo "== $h"; curl -s -H "Host: jujutsu.K50.com" http://$h/api; echo; done
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/9886c37b-7e76-4ad3-aac0-7a4309139423" />
+
+#### Uji akses langsung dari klien (harus ditolak)
+
+**itadori (Network 2) dan kusakabe (Network 3)**
+
+```bash
+for h in 192.236.4.3 192.236.4.4; do echo -n "$h / -> "; curl -s -o /dev/null -w "%{http_code}\n" http://$h/; done
+for h in 192.236.4.5 192.236.4.6 192.236.4.7; do echo -n "$h /api -> "; curl -s -o /dev/null -w "%{http_code}\n" http://$h/api; done
+echo "--- Host header dipalsukan:"
+curl -s -o /dev/null -w "%{http_code}\n" -H "Host: jujutsu.K50.com" http://192.236.4.3/
+echo "--- detail respons:"
+curl -i http://192.236.4.5/api | head -3
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/abe4d32e-210b-44c4-9396-3e2a8a4688a9" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/d64cd19e-a6eb-4e4b-90f4-317acc847e38" />
+
+Membuktikan worker API benar-benar hanya menerima geto, bukan semua node Network 4
+**yaga**
+
+```bash
+curl -s -o /dev/null -w "yaga -> nanami /api : %{http_code}\n" http://192.236.4.5/api
+curl -s -o /dev/null -w "yaga -> maki /      : %{http_code}\n" http://192.236.4.3/
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/fe1f0c59-6507-42e7-94af-30daa0096153" />
+
+#### Cek log tercatat di database
+
+**yaga**
+
+```bash
+mariadb -t -e "SELECT id, worker, client_ip, path, created_at FROM db_shibuya_K50.request_logs ORDER BY id DESC LIMIT 5;"
+mariadb -t -e "SELECT worker, COUNT(*) AS total FROM db_shibuya_K50.request_logs GROUP BY worker;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/48847c61-a18c-42c1-ae77-b19c8a8475b9" />
+
+**inumaki**
+
+```bash
+mariadb -t -e "SELECT id, worker, client_ip, path FROM db_shibuya_K50.request_logs ORDER BY id DESC LIMIT 5;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/1e9db6a6-25b5-4e0f-8d65-c8f6580939a5" />
+
+#### Cek autostart
+
+**maki, panda, nanami, todo, kirara**
+
+```bash
+cat /root/boot.d/*.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/afe7cc0a-43bc-4ceb-803b-3d92a627561d" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/ae422b2e-c993-4414-a15c-f8395c56f55c" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/6e331bf8-3255-4d19-8b18-7461172f49a8" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/f8a3adeb-4c03-4438-9910-e4ad62ebf100" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/922fa0c3-ae1d-43d7-b396-61a71b85b054" />
 
 ----
 
 ### Soal 15:
 > Geto bertugas mengendalikan pembagian beban request API di internal Data Center agar server tidak tumbang bersamaan. Konfigurasikan Nginx pada geto sebagai Load Balancer internal dengan upstream api_cluster yang mengarahkan trafik ke nanami dan todo. Terapkan algoritma Weighted Round Robin dengan bobot 3:1, di mana nanami menerima porsi beban tiga kali lebih banyak daripada todo. Buktikan distribusi beban ini dengan melakukan loop request berulang kali ke geto dari jaringan lokal Data Center dan periksa rasio responnya.
 
+#### Cek kesiapan
+
+**geto**
+
+```bash
+ip -br a show eth0
+ip route | grep default
+nginx -v
+for h in 192.236.4.5 192.236.4.6; do echo -n "$h : "; curl -s -H "Host: jujutsu.K50.com" http://$h/api; echo; done
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/eef15720-1aab-4d58-8b5f-dcf1b8d35a18" />
+
+#### Konfigurasi Load Balancer
+
+**geto**
+
+```bash
+cat > /root/setup-geto.sh << 'SETUP_EOF'
+#!/bin/bash
+# /root/setup-geto.sh - Internal Load Balancer (nginx): upstream api_cluster, WRR 3:1
+NANAMI="192.236.4.5"
+TODO="192.236.4.6"
+
+rm -f /etc/nginx/sites-enabled/default
+cat > /etc/nginx/sites-available/jujutsu-lb <<NGEOF
+upstream api_cluster {
+    zone api_cluster 64k;
+    server ${NANAMI} weight=3;
+    server ${TODO} weight=1;
+}
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.K50.com www.jujutsu.K50.com;
+
+    location /api {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host \$host;
+        add_header X-Upstream \$upstream_addr always;
+    }
+}
+NGEOF
+ln -sf /etc/nginx/sites-available/jujutsu-lb /etc/nginx/sites-enabled/jujutsu-lb
+
+nginx -t || exit 1
+service nginx restart
+
+# Autostart saat boot
+mkdir -p /root/boot.d
+cat > /root/boot.d/nginx.sh <<BOOTEOF
+service nginx start
+BOOTEOF
+
+sleep 1
+echo "===== HASIL geto ====="
+nginx -t 2>&1 | tail -2
+pgrep -a nginx | head -2
+ss -tlnp | grep ':80 '
+grep -A4 'upstream' /etc/nginx/sites-available/jujutsu-lb
+SETUP_EOF
+
+bash -n /root/setup-geto.sh && echo "script OK" && bash /root/setup-geto.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/849bbdf1-4b09-4840-9a32-9cede52ddbc8" />
+
+#### Uji satu request (lokal di geto)
+
+**geto**
+
+```bash
+curl -s -i http://127.0.0.1/api
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/9742ab76-186a-4690-bd30-5aa684370a50" />
+
+#### Buktikan rasio 3:1 dari jaringan Data Center
+
+**maki, lihat pola urutan (8 request)**
+
+```bash
+for i in $(seq 1 8); do curl -s http://192.236.4.2/api | grep -o '"worker":"[a-z]*"'; done
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/639a2a8b-0297-4065-ba27-98dd316cce3f" />
+
+**maki, hitung rasio (100 request)**
+
+```bash
+for i in $(seq 1 100); do curl -s http://192.236.4.2/api | grep -o '"worker":"[a-z]*"'; done | sort | uniq -c
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/02df05e0-5952-42c4-ae09-0cf88c8d5d37" />
+
+**maki, bukti lewat header X-Upstream**
+
+```bash
+for i in $(seq 1 100); do curl -s -D - -o /dev/null http://192.236.4.2/api | grep -i '^x-upstream'; done | sort | uniq -c
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/d4abd900-2e86-4729-a1db-4865d84d1c70" />
+
+
+#### Konfirmasi dari sisi database (bukti independen)
+
+**yaga**
+
+```bash
+mariadb -t -e "SELECT worker, COUNT(*) AS total FROM (SELECT worker FROM db_shibuya_K50.request_logs ORDER BY id DESC LIMIT 100) t GROUP BY worker;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/3103ce08-42bf-4d19-a211-d5c92fd1bcef" />
+
+#### Cek autostart
+
+**geto**
+
+```bash
+cat /root/boot.d/nginx.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a98805fd-0d90-434c-8bfb-d3e792eab1fc" />
+
+
+
 ----
 
 ### Soal 16:
 > Gojo berdiri di perbatasan DMZ sebagai gerbang publik tunggal bagi seluruh client dari luar maupun dalam. Konfigurasikan Nginx pada gojo untuk melayani domain jujutsu.<xxxx>.com dan www.jujutsu.<xxxx>.com menggunakan metode Path-Based Routing. Atur agar request root (/) diteruskan secara Round Robin ke worker frontend (maki dan panda), sedangkan request ke path /api diteruskan langsung ke geto. Uji dari client Divisi A atau B bahwa akses ke web utama dibalas oleh Maki/Panda, sedangkan akses ke /api diteruskan dan dijawab oleh Nanami/Todo.
 
+#### Cek kesiapan jalur gojo ke backend
+
+**gojo**
+
+```bash
+ip -br a show eth0
+ip route | grep default
+nginx -v
+echo "== maki";  curl -s -H "Host: jujutsu.K50.com" http://192.236.4.3/
+echo "== panda"; curl -s -H "Host: jujutsu.K50.com" http://192.236.4.4/
+echo "== geto";  curl -s -i http://192.236.4.2/api | egrep -i 'HTTP/|x-upstream|worker'
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a9e01096-6d98-404b-980d-8a436e023d03" />
+
+#### Konfigurasi Nginx di gojo
+
+**gojo**
+
+```bash
+cat > /root/setup-gojo.sh << 'SETUP_EOF'
+#!/bin/bash
+# /root/setup-gojo.sh - Public Reverse Proxy (nginx): path-based routing
+MAKI="192.236.4.3"
+PANDA="192.236.4.4"
+GETO="192.236.4.2"
+
+rm -f /etc/nginx/sites-enabled/default
+cat > /etc/nginx/sites-available/jujutsu-proxy <<'NGEOF'
+# Root (/) -> worker frontend, Round Robin
+upstream frontend_cluster {
+    zone frontend_cluster 64k;
+    server MAKI_IP;
+    server PANDA_IP;
+}
+
+# /api -> internal load balancer geto
+upstream geto_lb {
+    server GETO_IP;
+}
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.K50.com www.jujutsu.K50.com;
+
+    location / {
+        proxy_pass http://frontend_cluster;
+        proxy_set_header Host $host;
+        add_header X-Gojo-Upstream $upstream_addr always;
+    }
+
+    location /api {
+        proxy_pass http://geto_lb;
+        proxy_set_header Host $host;
+        add_header X-Gojo-Upstream $upstream_addr always;
+    }
+}
+NGEOF
+sed -i "s/MAKI_IP/$MAKI/; s/PANDA_IP/$PANDA/; s/GETO_IP/$GETO/" /etc/nginx/sites-available/jujutsu-proxy
+ln -sf /etc/nginx/sites-available/jujutsu-proxy /etc/nginx/sites-enabled/jujutsu-proxy
+
+nginx -t || exit 1
+service nginx restart
+
+# Autostart saat boot
+mkdir -p /root/boot.d
+cat > /root/boot.d/nginx.sh <<BOOTEOF
+service nginx start
+BOOTEOF
+
+sleep 1
+echo "===== HASIL gojo ====="
+nginx -t 2>&1 | tail -2
+pgrep -a nginx | head -2
+ss -tlnp | grep ':80 '
+grep -A4 'upstream' /etc/nginx/sites-available/jujutsu-proxy
+SETUP_EOF
+
+bash -n /root/setup-gojo.sh && echo "script OK" && bash /root/setup-gojo.sh```
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/29c1f1bd-39d1-451d-8ddd-8a3261e485a6" />
+
+#### Uji lokal di gojo
+
+**gojo**
+
+```bash
+echo "=== ROOT (/) ==="
+curl -s -D - http://127.0.0.1/ | egrep -i 'HTTP/|x-gojo|Worker'
+echo "=== /api ==="
+curl -s -D - http://127.0.0.1/api | egrep -i 'HTTP/|x-gojo|x-upstream|worker'
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/99c005f5-acb7-4475-9331-0187cc8463e0" />
+
+#### Cek resolusi DNS dari client
+
+**itadori**
+
+```bash
+cat /etc/resolv.conf
+dig +short jujutsu.K50.com
+dig +short www.jujutsu.K50.com
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/1f79ddf2-f3ec-4da9-874f-177322ed8644" />
+
+#### Uji Round Robin root (/) dari client
+
+**itadori**
+
+```bash
+for i in $(seq 1 6); do curl -s http://jujutsu.K50.com/ | grep Worker; done
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/36985185-78ea-42b4-9979-c87b5d9637d9" />
+
+Hitung rasio
+
+```bash
+for i in $(seq 1 100); do curl -s http://jujutsu.K50.com/ | grep -o 'Worker: [a-z]*'; done | sort | uniq -c
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/8d1b81ce-e135-4028-9bf3-95dda4a5f63a" />
+
+#### Uji /api lewat gojo dari client
+
+**itadori**
+
+```bash
+curl -s -D - http://jujutsu.K50.com/api | egrep -i 'HTTP/|x-gojo|x-upstream|worker'
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/96b827cd-91e7-44ee-a631-eeca63c5f587" />
+
+Hitung distribusi (diteruskan ke geto, jadi 3:1 tetap berlaku)
+
+```bash
+for i in $(seq 1 40); do curl -s http://jujutsu.K50.com/api | grep -o '"worker":"[a-z]*"'; done | sort | uniq -c
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/53ef0de9-30ce-4eb5-be19-9f5983285449" />
+
+#### Uji dari client Divisi B dan domain www
+
+**kusakabe**
+
+```bash
+echo "--- www root:"
+curl -s http://www.jujutsu.K50.com/ | grep Worker
+echo "--- www api:"
+curl -s http://www.jujutsu.K50.com/api | grep -o '"worker":"[a-z]*"'
+echo "--- 4 request root:"
+for i in 1 2 3 4; do curl -s http://jujutsu.K50.com/ | grep -o 'Worker: [a-z]*'; done
+echo "--- 4 request api:"
+for i in 1 2 3 4; do curl -s http://jujutsu.K50.com/api | grep -o '"worker":"[a-z]*"'; done
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/9f21bec2-5f4d-4303-a312-826fbd33b037" />
+
+#### Bukti gojo adalah gerbang tunggal
+
+**itadori**
+
+```bash
+echo -n "via gojo        -> / : "; curl -s -o /dev/null -w "%{http_code}\n" http://jujutsu.K50.com/
+echo -n "langsung maki   -> / : "; curl -s -o /dev/null -w "%{http_code}\n" http://192.236.4.3/
+echo -n "langsung nanami -> /api : "; curl -s -o /dev/null -w "%{http_code}\n" http://192.236.4.5/api
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/20cb00fd-1af6-4a52-9bd1-fe31c88dd81e" />
+
+#### Bukti dari sisi worker (source IP = gojo)
+
+**maki**
+
+```bash
+tail -n 4 /var/log/nginx/access.log
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/f87f1623-1441-4ef6-92bd-23ddc5fd112c" />
+
+**yaga**
+
+```bash
+mariadb -t -e "SELECT id, worker, client_ip, path FROM db_shibuya_K50.request_logs ORDER BY id DESC LIMIT 5;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/9aa1f1c1-6bf7-4a71-a1d2-0de6bc84a0a6" />
+
+#### Cek autostart
+
+**gojo**
+
+```bash
+cat /root/boot.d/nginx.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/50d2e517-c8fc-4a31-92b1-cc9e190f9a7c" />
+
 ----
 
 ### Soal 17:
 > Komando pusat perlu mengetahui IP asli klien yang mengirimkan request tanpa tertukar dengan IP proxy perantara. Konfigurasikan gojo dan geto agar meneruskan informasi alamat klien melalui header X-Real-IP dan X-Forwarded-For. Pastikan geto hanya mempercayai informasi alamat klien yang diterima dari proxy terpercaya, dan skrip API menyimpan alamat klien yang telah diverifikasi ke kolom client_ip pada tabel request_logs di database yaga. Uji dengan mengirimkan request dari klien Network 2 dan Network 3 ke endpoint /api, kemudian periksa database untuk memastikan alamat yang tercatat sesuai dengan IP klien asal, bukan IP gojo atau geto.
+
+#### Worker API menyimpan IP klien terverifikasi
+
+**nanami, todo, kirara**
+
+```bash
+cat > /root/setup-api-17.sh << 'SETUP_EOF'
+#!/bin/bash
+# /root/setup-api-17.sh - Soal 17: worker API mencatat IP klien terverifikasi
+GETO="192.236.4.2"
+PHPV=$(ls /usr/sbin/php-fpm[0-9]* 2>/dev/null | head -1 | sed 's/.*php-fpm//')
+[ -z "$PHPV" ] && { echo "php-fpm tidak ditemukan"; exit 1; }
+NODE=$(hostname)
+
+# 1. Skrip API
+mkdir -p /var/www/api
+cat > /var/www/api/index.php <<'PHPEOF'
+<?php
+header('Content-Type: application/json');
+mysqli_report(MYSQLI_REPORT_OFF);
+
+// Hanya proxy terpercaya (geto) yang boleh menyatakan IP klien
+const TRUSTED_PROXY = '__GETO__';
+
+$worker = gethostname();
+$peer   = $_SERVER['REMOTE_ADDR'] ?? '';
+$client = $peer;
+if ($peer === TRUSTED_PROXY) {
+    $real = trim($_SERVER['HTTP_X_REAL_IP'] ?? '');
+    if (filter_var($real, FILTER_VALIDATE_IP)) {
+        $client = $real;
+    }
+}
+$path = $_SERVER['REQUEST_URI'] ?? '';
+
+$db = mysqli_init();
+$db->options(MYSQLI_OPT_CONNECT_TIMEOUT, 3);
+if (!@$db->real_connect('192.236.4.20', 'shibuya', 'shibuya50', 'db_shibuya_K50')) {
+    http_response_code(500);
+    echo json_encode(['status' => 'error', 'worker' => $worker, 'message' => 'koneksi database gagal']);
+    exit;
+}
+$stmt = $db->prepare('INSERT INTO request_logs (worker, client_ip, path) VALUES (?, ?, ?)');
+$stmt->bind_param('sss', $worker, $client, $path);
+if (!$stmt->execute()) {
+    http_response_code(500);
+    echo json_encode(['status' => 'error', 'worker' => $worker, 'message' => 'insert gagal']);
+    exit;
+}
+echo json_encode([
+    'status'    => 'ok',
+    'worker'    => $worker,
+    'client_ip' => $client,
+    'peer_ip'   => $peer,
+    'path'      => $path,
+    'log_id'    => $db->insert_id
+], JSON_UNESCAPED_SLASHES);
+PHPEOF
+sed -i "s/__GETO__/$GETO/" /var/www/api/index.php
+chown -R www-data:www-data /var/www/api
+
+# 2. Virtual host: tetap hanya geto yang boleh masuk, + log header
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/jujutsu-api
+cat > /etc/nginx/sites-available/jujutsu-api <<'NGEOF'
+log_format api_realip '$remote_addr real=$http_x_real_ip xff="$http_x_forwarded_for" "$request" $status';
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.K50.com www.jujutsu.K50.com;
+    root /var/www/api;
+    access_log /var/log/nginx/api-realip.log api_realip;
+
+    allow __GETO__;
+    deny all;
+
+    location /api {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /var/www/api/index.php;
+        fastcgi_pass unix:/run/php/php__PHPV__-fpm.sock;
+    }
+}
+NGEOF
+sed -i "s/__GETO__/$GETO/; s/__PHPV__/$PHPV/" /etc/nginx/sites-available/jujutsu-api
+ln -sf /etc/nginx/sites-available/jujutsu-api /etc/nginx/sites-enabled/jujutsu-api
+
+# 3. Jalankan ulang service
+mkdir -p /run/php
+service php${PHPV}-fpm restart
+nginx -t || exit 1
+service nginx restart
+
+sleep 1
+echo "===== HASIL $NODE ====="
+nginx -t 2>&1 | tail -2
+ss -tlnp | grep ':80 '
+grep -n 'TRUSTED_PROXY' /var/www/api/index.php | head -1
+echo -n "akses lokal /api (harus 403) : "; curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1/api
+SETUP_EOF
+
+bash -n /root/setup-api-17.sh && echo "script OK" && bash /root/setup-api-17.sh
+````
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/35d953d4-2064-457b-9c9a-ebcb29cd48f3" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/b0135201-a328-4c27-8ad0-3bdacb16bc20" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a3984a3d-cab8-48eb-bceb-1ccabd7281c1" />
+
+#### geto hanya percaya pada gojo
+
+**geto**
+
+```bash
+cat > /root/setup-geto-17.sh << 'SETUP_EOF'
+#!/bin/bash
+# /root/setup-geto-17.sh - Soal 17: LB teruskan IP klien, hanya percaya gojo
+NANAMI="192.236.4.5"
+TODO="192.236.4.6"
+GOJO="192.236.1.4"
+
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/jujutsu-lb
+cat > /etc/nginx/sites-available/jujutsu-lb <<'NGEOF'
+upstream api_cluster {
+    zone api_cluster 64k;
+    server __NANAMI__ weight=3;
+    server __TODO__ weight=1;
+}
+
+# Daftar proxy terpercaya, dinilai dari alamat peer asli koneksi
+geo $realip_remote_addr $from_trusted {
+    default    0;
+    __GOJO__   1;
+}
+
+# Rantai X-Forwarded-For yang dikirim ke worker:
+#  - dari gojo     : rantai dari gojo + IP gojo
+#  - dari selain gojo : dibuang, diganti IP peer (anti-spoof)
+map $from_trusted $xff_out {
+    1        "$http_x_forwarded_for, $realip_remote_addr";
+    default  $remote_addr;
+}
+
+log_format geto_realip 'peer=$realip_remote_addr client=$remote_addr xff="$xff_out" up=$upstream_addr "$request" $status';
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.K50.com www.jujutsu.K50.com;
+    access_log /var/log/nginx/geto-realip.log geto_realip;
+
+    # IP klien dari X-Real-IP hanya dipercaya bila koneksi datang dari gojo
+    set_real_ip_from __GOJO__;
+    real_ip_header X-Real-IP;
+    real_ip_recursive off;
+
+    location /api {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $xff_out;
+        add_header X-Upstream $upstream_addr always;
+        add_header X-Client-Seen $remote_addr always;
+    }
+}
+NGEOF
+sed -i "s/__NANAMI__/$NANAMI/g; s/__TODO__/$TODO/g; s/__GOJO__/$GOJO/g" /etc/nginx/sites-available/jujutsu-lb
+ln -sf /etc/nginx/sites-available/jujutsu-lb /etc/nginx/sites-enabled/jujutsu-lb
+
+nginx -t || exit 1
+service nginx restart
+
+sleep 1
+echo "===== HASIL geto ====="
+nginx -t 2>&1 | tail -2
+ss -tlnp | grep ':80 '
+grep -nE 'set_real_ip_from|real_ip_header|weight=' /etc/nginx/sites-available/jujutsu-lb
+SETUP_EOF
+
+bash -n /root/setup-geto-17.sh && echo "script OK" && bash /root/setup-geto-17.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/10ff3b7f-c78d-4488-bfc3-481715de9c01" />
+
+#### gojo meneruskan IP klien
+
+**gojo**
+
+```bash
+cat > /root/setup-gojo-17.sh << 'SETUP_EOF'
+#!/bin/bash
+# /root/setup-gojo-17.sh - Soal 17: gojo kirim X-Real-IP dan X-Forwarded-For
+MAKI="192.236.4.3"
+PANDA="192.236.4.4"
+GETO="192.236.4.2"
+
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/jujutsu-proxy
+cat > /etc/nginx/sites-available/jujutsu-proxy <<'NGEOF'
+upstream frontend_cluster {
+    zone frontend_cluster 64k;
+    server __MAKI__;
+    server __PANDA__;
+}
+
+upstream geto_lb {
+    server __GETO__;
+}
+
+log_format gojo_realip '$remote_addr xff="$http_x_forwarded_for" up=$upstream_addr "$request" $status';
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.K50.com www.jujutsu.K50.com;
+    access_log /var/log/nginx/gojo-realip.log gojo_realip;
+
+    location / {
+        proxy_pass http://frontend_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        add_header X-Gojo-Upstream $upstream_addr always;
+    }
+
+    location /api {
+        proxy_pass http://geto_lb;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        add_header X-Gojo-Upstream $upstream_addr always;
+    }
+}
+NGEOF
+sed -i "s/__MAKI__/$MAKI/g; s/__PANDA__/$PANDA/g; s/__GETO__/$GETO/g" /etc/nginx/sites-available/jujutsu-proxy
+ln -sf /etc/nginx/sites-available/jujutsu-proxy /etc/nginx/sites-enabled/jujutsu-proxy
+
+nginx -t || exit 1
+service nginx restart
+
+sleep 1
+echo "===== HASIL gojo ====="
+nginx -t 2>&1 | tail -2
+ss -tlnp | grep ':80 '
+grep -n 'X-Real-IP\|X-Forwarded-For' /etc/nginx/sites-available/jujutsu-proxy
+SETUP_EOF
+
+bash -n /root/setup-gojo-17.sh && echo "script OK" && bash /root/setup-gojo-17.sh
+```
+
+
+
+
+
+
+
+
 
 ----
 
