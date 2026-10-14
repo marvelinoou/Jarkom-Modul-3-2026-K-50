@@ -4,8 +4,8 @@
 
 | No  | Nama                   | NRP        | Pengerjaan Soal |
 | --- | ---------------------- | ---------- | --------------- |
-| 1   | Marvelino Davas        | 5027251085 | -               |
-| 2   | Nathania Tiara Wahyudi | 5027251089 | -               |
+| 1   | Marvelino Davas        | 5027251085 | 1-10            |
+| 2   | Nathania Tiara Wahyudi | 5027251089 | 11-20           |
 
 ---
 
@@ -13,19 +13,19 @@
 
 Prefix IP kelompok: `192.236`. Semua subnet memakai `/24`. `<xxxx>` diisi `K50`, sehingga domain-search menjadi `K50.com`.
 
-| Jaringan  | Network          | Gateway (jichi)       | Isi                                                    |
-| --------- | ---------------- | --------------------- | ------------------------------------------------------ |
-| WAN       | 192.168.122.0/24 | `eth0` (DHCP dari NAT1) | Akses internet                                         |
-| Network 1 | 192.236.1.0/24   | `eth1` 192.236.1.1    | DMZ: utahime, shoko, gojo                              |
-| Network 2 | 192.236.2.0/24   | `eth2` 192.236.2.1    | Divisi A: itadori, fushiguro, zenin, okkotsu           |
-| Network 3 | 192.236.3.0/24   | `eth3` 192.236.3.1    | Divisi B: ino, kusakabe, miwa, kugisaki                |
-| Network 4 | 192.236.4.0/24   | `eth4` 192.236.4.1    | Data Center: tengen, geto, worker, database            |
+| Jaringan  | Network          | Gateway (jichi)         | Isi                                          |
+| --------- | ---------------- | ----------------------- | -------------------------------------------- |
+| WAN       | 192.168.122.0/24 | `eth0` (DHCP dari NAT1) | Akses internet                               |
+| Network 1 | 192.236.1.0/24   | `eth1` 192.236.1.1      | DMZ: utahime, shoko, gojo                    |
+| Network 2 | 192.236.2.0/24   | `eth2` 192.236.2.1      | Divisi A: itadori, fushiguro, zenin, okkotsu |
+| Network 3 | 192.236.3.0/24   | `eth3` 192.236.3.1      | Divisi B: ino, kusakabe, miwa, kugisaki      |
+| Network 4 | 192.236.4.0/24   | `eth4` 192.236.4.1      | Data Center: tengen, geto, worker, database  |
 
 Catatan umum pengerjaan:
 
 - Semua script disimpan di `/root` node terkait dan salinannya ada di folder [script/](script/).
 - Image `debinet` tidak memakai systemd. File `/root/init.sh` dijalankan otomatis setiap node boot, sehingga autostart layanan dipasang di sana.
-- Client `miwa` pada soal bernama `ralwa` di project GNS3.
+- Alamat client dari pool dinamis bisa berbeda antar screenshot (misalnya itadori `.2.10` atau `.2.11`). Urutan client meminta lease setelah node di-restart menentukan siapa yang mendapat alamat pertama di pool. Yang dijamin oleh konfigurasi adalah **pool**-nya, bukan angka alamat tertentu, kecuali kugisaki yang selalu `.3.99`.
 
 ---
 
@@ -84,6 +84,8 @@ iface eth4 inet static
     netmask 255.255.255.0
 ```
 
+eth0 mengambil alamat dari NAT1 lewat DHCP, sedangkan eth1 sampai eth4 diberi alamat `.1` di tiap network sehingga menjadi gateway bagi host di network tersebut.
+
 #### Aktifkan IPv4 forwarding dan source NAT di jichi (`/root/soal01-jichi.sh`)
 
 ```bash
@@ -102,7 +104,9 @@ iptables -t nat -C POSTROUTING -s $PREFIX.0.0/16 -o eth0 -j MASQUERADE 2>/dev/nu
 echo "nameserver 192.168.122.1" > /etc/resolv.conf
 ```
 
-Aturan NAT dicek dulu dengan `-C` supaya tidak dobel ketika script dijalankan ulang.
+- `ip_forward=1` membuat jichi meneruskan paket antar network, bukan membuangnya.
+- MASQUERADE hanya untuk trafik yang keluar lewat `eth0` (internet). NAT1 tidak mengenal alamat `192.236.x.x`, jadi alamat sumbernya diganti menjadi IP eth0 jichi. Trafik antar network internal tidak di-NAT, sehingga alamat asli host tetap terlihat.
+- Aturan NAT dicek dulu dengan `-C` supaya tidak dobel ketika script dijalankan ulang.
 
 #### Konfigurasi host infrastruktur (`/etc/network/interfaces`)
 
@@ -131,29 +135,11 @@ ping -c 2 8.8.8.8
 ping -c 2 google.com
 ```
 
-```
-lo               UNKNOWN        127.0.0.1/8 ::1/128
-eth0             UNKNOWN        192.168.122.149/24
-eth1             UNKNOWN        192.236.1.1/24 fe80::42:5aff:feca:7801/64
-eth2             UNKNOWN        192.236.2.1/24 fe80::42:5aff:feca:7802/64
-eth3             UNKNOWN        192.236.3.1/24 fe80::42:5aff:feca:7803/64
-eth4             UNKNOWN        192.236.4.1/24 fe80::42:5aff:feca:7804/64
-default via 192.168.122.1 dev eth0 metric 55842
-192.168.122.0/24 dev eth0 proto kernel scope link src 192.168.122.149
-192.236.1.0/24 dev eth1 proto kernel scope link src 192.236.1.1
-192.236.2.0/24 dev eth2 proto kernel scope link src 192.236.2.1
-192.236.3.0/24 dev eth3 proto kernel scope link src 192.236.3.1
-192.236.4.0/24 dev eth4 proto kernel scope link src 192.236.4.1
-net.ipv4.ip_forward = 1
--P POSTROUTING ACCEPT
--A POSTROUTING -s 192.236.0.0/16 -o eth0 -j MASQUERADE
---- 8.8.8.8 ping statistics ---
-2 packets transmitted, 2 received, 0% packet loss, time 1001ms
---- google.com ping statistics ---
-2 packets transmitted, 2 received, 0% packet loss, time 1002ms
-```
+![Verifikasi jichi](screenshot/soal01-verifikasi-jichi.png)
 
-#### Verifikasi di tiap host infrastruktur
+eth1 sampai eth4 sudah menjadi gateway `.1` di tiap network, `ip_forward = 1`, ada satu aturan MASQUERADE `-o eth0`, dan jichi bisa mengakses internet.
+
+#### Verifikasi di host infrastruktur
 
 ```bash
 ip -br a show eth0
@@ -163,24 +149,15 @@ ping -c 2 8.8.8.8         # akses eksternal lewat source NAT jichi
 ping -c 1 google.com
 ```
 
-Hasil di kedua belas host:
+Diambil tiga host sebagai perwakilan: utahime (Network 1), tengen dan yaga (Network 4). utahime dan yaga juga melakukan ping lintas network untuk membuktikan routing dua arah lewat jichi.
 
-| Node    | IP eth0         | Default route   | Ping gateway | Ping 8.8.8.8 | Ping google.com |
-| ------- | --------------- | --------------- | ------------ | ------------ | --------------- |
-| utahime | 192.236.1.2/24  | via 192.236.1.1 | 0% loss      | 0% loss      | 0% loss         |
-| shoko   | 192.236.1.3/24  | via 192.236.1.1 | 0% loss      | 0% loss      | 0% loss         |
-| gojo    | 192.236.1.4/24  | via 192.236.1.1 | 0% loss      | 0% loss      | 0% loss         |
-| geto    | 192.236.4.2/24  | via 192.236.4.1 | 0% loss      | 0% loss      | 0% loss         |
-| maki    | 192.236.4.3/24  | via 192.236.4.1 | 0% loss      | 0% loss      | 0% loss         |
-| panda   | 192.236.4.4/24  | via 192.236.4.1 | 0% loss      | 0% loss      | 0% loss         |
-| nanami  | 192.236.4.5/24  | via 192.236.4.1 | 0% loss      | 0% loss      | 0% loss         |
-| todo    | 192.236.4.6/24  | via 192.236.4.1 | 0% loss      | 0% loss      | 0% loss         |
-| kirara  | 192.236.4.7/24  | via 192.236.4.1 | 0% loss      | 0% loss      | 0% loss         |
-| tengen  | 192.236.4.10/24 | via 192.236.4.1 | 0% loss      | 0% loss      | 0% loss         |
-| yaga    | 192.236.4.20/24 | via 192.236.4.1 | 0% loss      | 0% loss      | 0% loss         |
-| inumaki | 192.236.4.21/24 | via 192.236.4.1 | 0% loss      | 0% loss      | 0% loss         |
+![Verifikasi utahime](screenshot/soal01-verifikasi-utahime.png)
 
-Routing antarjaringan juga diuji: utahime (Network 1) dapat ping tengen `192.236.4.10` dan yaga `192.236.4.20`, dan yaga (Network 4) dapat ping gojo `192.236.1.4`, semuanya 0% loss.
+![Verifikasi tengen](screenshot/soal01-verifikasi-tengen.png)
+
+![Verifikasi yaga](screenshot/soal01-verifikasi-yaga.png)
+
+Ping ke gateway memiliki `ttl=64`, sedangkan ping lintas network (utahime ke `192.236.4.10` dan `192.236.4.20`, yaga ke `192.236.1.4`) memiliki `ttl=63`. Selisih satu menunjukkan paket melewati satu router, yaitu jichi.
 
 ----
 
@@ -238,7 +215,7 @@ service isc-dhcp-server restart
 service isc-dhcp-server status
 ```
 
-Subnet Network 4 dideklarasikan kosong. Tanpa deklarasi ini `dhcpd` menolak berjalan di `eth0` dengan pesan "No subnet declaration for eth0", karena interface tempat ia listen tidak punya subnet yang dikenali.
+Subnet Network 4 dideklarasikan kosong. Tanpa deklarasi ini `dhcpd` menolak berjalan di `eth0` dengan pesan "No subnet declaration for eth0", karena interface tempat ia listen tidak punya subnet yang dikenali. Scope Network 2 dan Network 3 tetap dideklarasikan walaupun tengen tidak berada di sana, karena request dari kedua network itu akan datang lewat relay (soal 3).
 
 #### Verifikasi di tengen
 
@@ -250,20 +227,9 @@ ps aux | grep dhcpd
 ss -ulnp | grep :67
 ```
 
-```
-Internet Systems Consortium DHCP Server 4.4.3-P1
-Config file: /etc/dhcp/dhcpd.conf
-Database file: /var/lib/dhcp/dhcpd.leases
-PID file: /var/run/dhcpd.pid
-Launching IPv4 server only.
-Starting ISC DHCPv4 server: dhcpd.
-Status of ISC DHCPv4 server: dhcpd is running.
-INTERFACESv4="eth0"
-root   504  0.0  0.0   9536  6924 ?  Ss  13:42  0:00 /usr/sbin/dhcpd -4 -q -cf /etc/dhcp/dhcpd.conf eth0
-UNCONN 0  0  0.0.0.0:67  0.0.0.0:*  users:(("dhcpd",pid=504,fd=7))
-```
+![Verifikasi tengen](screenshot/soal02-verifikasi-tengen.png)
 
-Pesan "No subnet declaration" tidak muncul di log (`grep -c` menghasilkan 0).
+`dhcpd -t` lolos tanpa error "No subnet declaration", service berjalan, dan `dhcpd` listen di UDP 67 pada `eth0`.
 
 ----
 
@@ -296,6 +262,13 @@ service isc-dhcp-relay status
 
 `eth2` dan `eth3` dipasang sebagai interface downstream (menerima request client), sedangkan `eth4` sebagai upstream ke tengen. Percobaan pertama hanya dengan `INTERFACES="eth2 eth3"` gagal: capture di tengen menunjukkan request sudah diteruskan dan tengen sudah membalas ke `192.236.2.1`, tetapi relay membuang balasan itu karena datang dari interface yang tidak ia dengarkan, sehingga tidak ada client yang mendapat lease.
 
+```bash
+cat /etc/default/isc-dhcp-relay
+ps -e -o pid,args | grep dhcrelay
+```
+
+![Relay di jichi](screenshot/soal03-relay-jichi.png)
+
 #### Konfigurasi delapan client (`/etc/network/interfaces`)
 
 ```
@@ -308,40 +281,24 @@ iface eth0 inet dhcp
     udhcpc_opts -O search
 ```
 
-#### Minta lease di tiap client
+#### Minta lease di client
 
 ```bash
+ip link show eth0
 ifdown eth0; ifup eth0
 ip a
 ip route
 ```
 
-Relay berjalan di jichi:
+Client Network 2 (itadori):
 
-```
-Requesting: eth2 as upstream: N downstream: Y
-Requesting: eth3 as upstream: N downstream: Y
-Requesting: eth4 as upstream: Y downstream: N
-root  250  0.0  0.0  5992  3328 ?  Ss  13:44  0:00 /usr/sbin/dhcrelay -q -id eth2 -id eth3 -iu eth4 192.236.4.10
-```
+![Lease itadori](screenshot/soal03-lease-itadori.png)
 
-Hasil di client Network 2 (itadori) dan Network 3 (ino):
+Client Network 3 (ino):
 
-```
-udhcpc: broadcasting select for 192.236.2.10, server 192.236.4.10
-udhcpc: lease of 192.236.2.10 obtained from 192.236.4.10, lease time 600
-eth0 UNKNOWN 192.236.2.10/24 fe80::42:5ff:fe9a:ab00/64
-default via 192.236.2.1 dev eth0 metric 55900
-```
+![Lease ino](screenshot/soal03-lease-ino.png)
 
-```
-udhcpc: broadcasting select for 192.236.3.10, server 192.236.4.10
-udhcpc: lease of 192.236.3.10 obtained from 192.236.4.10, lease time 600
-eth0 UNKNOWN 192.236.3.10/24 fe80::42:aaff:feda:e500/64
-default via 192.236.3.1 dev eth0 metric 55916
-```
-
-Kedelapan client memperoleh lease dari `192.236.4.10` dengan gateway subnetnya masing-masing, padahal tengen berada di Network 4.
+itadori mendapat `192.236.2.11` dengan gateway `192.236.2.1`, dan ino mendapat `192.236.3.11` dengan gateway `192.236.3.1`. Keduanya diberikan oleh `192.236.4.10`, padahal tengen berada di Network 4. Ini hanya mungkin karena request diteruskan oleh relay di jichi.
 
 ----
 
@@ -361,9 +318,9 @@ ip link show eth0
 | zenin     | 02:42:f6:49:44:00 | `divA-pool2` |
 | okkotsu   | 02:42:ef:c5:90:00 | `divA-pool2` |
 
-#### Perubahan `dhcpd.conf` di tengen (`/root/soal04-tengen.sh`)
+MAC address ini tetap sama walaupun node di-restart atau container dibuat ulang, sehingga aman dipakai sebagai dasar kelas.
 
-Kelas didefinisikan berdasarkan MAC Address, lalu subnet Network 2 dipecah menjadi dua pool yang masing-masing hanya menerima anggota kelasnya:
+#### Perubahan `dhcpd.conf` di tengen (`/root/soal04-tengen.sh`)
 
 ```
 # Divisi A dipisah per MAC Address (1: = tipe hardware ethernet)
@@ -392,27 +349,38 @@ subnet 192.236.2.0 netmask 255.255.255.0 {
 }
 ```
 
-Rentang `.2.36`–`.2.69` tidak masuk `range` mana pun, sehingga tidak pernah dialokasikan.
+- `class ... { match hardware; }` membuat kelas yang anggotanya ditentukan dari hardware address client.
+- `subclass ... 1:<MAC>` mendaftarkan MAC ke kelas. `1:` adalah kode tipe hardware Ethernet; nilai dari `match hardware` selalu diawali tipe hardware, jadi tanpa `1:` MAC tidak akan pernah cocok.
+- `allow members of` membuat tiap pool hanya melayani anggota kelasnya.
+- Rentang `.2.36` sampai `.2.69` tidak masuk `range` mana pun, sehingga tidak pernah dialokasikan.
+
+```bash
+grep -n "divA\|range 192.236.2" /etc/dhcp/dhcpd.conf
+```
+
+![Config soal 4 di tengen](screenshot/soal04-config-tengen.png)
 
 #### Terapkan di tengen, lalu renew di client Network 2
 
 ```bash
 bash /root/soal04-tengen.sh     # tengen
-ifdown eth0; ifup eth0          # tiap client Network 2
 ```
 
-```
-=== itadori
-udhcpc: lease of 192.236.2.10 obtained from 192.236.4.10, lease time 600
-=== fushiguro
-udhcpc: lease of 192.236.2.11 obtained from 192.236.4.10, lease time 600
-=== zenin
-udhcpc: lease of 192.236.2.70 obtained from 192.236.4.10, lease time 600
-=== okkotsu
-udhcpc: lease of 192.236.2.71 obtained from 192.236.4.10, lease time 600
+```bash
+ip link show eth0               # client Network 2
+ifdown eth0; ifup eth0
+ip -4 -o addr show eth0
 ```
 
-Sebelum kelas diterapkan, zenin dan okkotsu masih mendapat `.2.12` dan `.2.13`. Setelah diterapkan keduanya pindah ke Pool 2.
+Perwakilan Pool 1 (itadori):
+
+![Lease itadori](screenshot/soal04-lease-itadori.png)
+
+Perwakilan Pool 2 (zenin):
+
+![Lease zenin](screenshot/soal04-lease-zenin.png)
+
+itadori mendapat `192.236.2.11` (Pool 1) dan zenin mendapat `192.236.2.71` (Pool 2). fushiguro dan okkotsu dibuktikan bersama seluruh client di soal 7.
 
 ----
 
@@ -432,7 +400,7 @@ subclass "divB-short" 1:02:42:aa:da:e5:00;   # ino
 subclass "divB-short" 1:02:42:5a:e2:39:00;   # kusakabe
 
 class "divB-long" { match hardware; }
-subclass "divB-long" 1:02:42:35:f5:07:00;    # miwa (node "ralwa" di project)
+subclass "divB-long" 1:02:42:35:f5:07:00;    # miwa
 
 # Network 3 (Divisi B)
 subnet 192.236.3.0 netmask 255.255.255.0 {
@@ -457,30 +425,37 @@ subnet 192.236.3.0 netmask 255.255.255.0 {
 }
 ```
 
-DNS dan domain-search ditaruh di tingkat global supaya berlaku untuk Network 2 dan Network 3 sekaligus.
+- Lease time dipasang di dalam masing-masing pool, sehingga tiap kelas client mendapat durasi sendiri. `default-lease-time` dan `max-lease-time` dibuat sama supaya client tidak bisa meminta lease lebih panjang dari kelasnya.
+- DNS dan domain-search ditaruh di tingkat global supaya berlaku untuk Network 2 dan Network 3 sekaligus.
+- `default-lease-time 600` dan `max-lease-time 7200` di bagian atas file adalah nilai global untuk client yang tidak masuk pool berlease khusus, yaitu Network 2 dan kugisaki.
+
+```bash
+grep -n "domain-\|divB\|range 192.236.3\|lease-time" /etc/dhcp/dhcpd.conf
+```
+
+![Config soal 5 di tengen](screenshot/soal05-config-tengen.png)
 
 #### Terapkan di tengen, lalu renew di client Network 3
 
 ```bash
 bash /root/soal05-tengen.sh     # tengen
-ifdown eth0; ifup eth0          # tiap client Network 3
+```
+
+```bash
+ifdown eth0; ifup eth0          # client Network 3
+ip -4 -o addr show eth0
 cat /etc/resolv.conf
 ```
 
-```
-=== ino
-udhcpc: lease of 192.236.3.10 obtained from 192.236.4.10, lease time 1800
-=== kusakabe
-udhcpc: lease of 192.236.3.11 obtained from 192.236.4.10, lease time 1800
-=== miwa (ralwa)
-udhcpc: lease of 192.236.3.100 obtained from 192.236.4.10, lease time 43200
-```
+Perwakilan short lease (ino):
 
-```
-search K50.com
-nameserver 192.236.1.2
-nameserver 192.236.1.3
-```
+![Lease ino](screenshot/soal05-lease-ino.png)
+
+Perwakilan long lease (miwa):
+
+![Lease miwa](screenshot/soal05-lease-miwa.png)
+
+ino mendapat alamat di pool short lease dengan `lease time 1800`, sedangkan miwa mendapat `192.236.3.100` di pool long lease dengan `lease time 43200`. Di kedua client, `resolv.conf` berisi `search K50.com`, `nameserver 192.236.1.2`, dan `nameserver 192.236.1.3`.
 
 Baris `search K50.com` baru muncul setelah `udhcpc_opts -O search` ditambahkan di `/etc/network/interfaces` client. `udhcpc` bawaan alpinet tidak meminta option 119 secara default, jadi tanpa baris itu server tidak mengirimkannya walaupun sudah dikonfigurasi.
 
@@ -503,27 +478,32 @@ host kugisaki {
 
 `192.236.3.99` terletak di antara pool short lease (berakhir di `.3.89`) dan pool long lease (mulai di `.3.100`), sehingga tidak bisa diberikan ke client lain. Script soal 6 berisi konfigurasi DHCP final; isi lengkapnya ada di [script/soal06/soal06-tengen.sh](script/soal06/soal06-tengen.sh).
 
-#### Validasi di tengen, lalu renew di kugisaki
+#### Validasi di tengen
 
 ```bash
 bash /root/soal06-tengen.sh     # tengen: dhcpd -t lalu restart
-ifdown eth0; ifup eth0          # kugisaki
-ip a show eth0
-ip route
+grep -n -A3 "host kugisaki" /etc/dhcp/dhcpd.conf
+grep -n "range 192.236.3" /etc/dhcp/dhcpd.conf
+dhcpd -t -cf /etc/dhcp/dhcpd.conf
 ```
 
-```
-Status of ISC DHCPv4 server: dhcpd is running.
+![Config soal 6 di tengen](screenshot/soal06-config-tengen.png)
+
+#### Renew di kugisaki
+
+```bash
+ip link show eth0
+ifdown eth0; ifup eth0
+ip -4 -o addr show eth0
 ```
 
-```
-udhcpc: lease of 192.236.3.99 obtained from 192.236.4.10, lease time 600
-192.236.3.99/24 brd 192.236.3.255
-default via 192.236.3.1 dev eth0 metric 55924
-192.236.3.0/24 dev eth0 proto kernel scope link src 192.236.3.99
-```
+![Lease kugisaki](screenshot/soal06-lease-kugisaki.png)
 
-Renew diulang lagi setelah restart server di soal 10 dan kugisaki tetap menerima `192.236.3.99`.
+Renew diulang sekali lagi untuk membuktikan alamatnya tetap sama setiap kali terhubung:
+
+![Renew kugisaki](screenshot/soal06-renew-kugisaki.png)
+
+Kedua renew menghasilkan `192.236.3.99` dari `192.236.4.10`. Lease time kugisaki 600 detik karena host dengan fixed address tidak masuk pool mana pun, sehingga memakai `default-lease-time` global; soal tidak menentukan lease time untuk kugisaki.
 
 ----
 
@@ -538,31 +518,34 @@ ip route
 cat /etc/resolv.conf
 ```
 
-Contoh keluaran di itadori:
+![Client itadori](screenshot/soal07-client-itadori.png)
 
-```
-192.236.2.10/24 brd 192.236.2.255
-default via 192.236.2.1 dev eth0 metric 55900
-192.236.2.0/24 dev eth0 proto kernel scope link src 192.236.2.10
-search K50.com
-nameserver 192.236.1.2
-nameserver 192.236.1.3
-```
+![Client fushiguro](screenshot/soal07-client-fushiguro.png)
+
+![Client zenin](screenshot/soal07-client-zenin.png)
+
+![Client okkotsu](screenshot/soal07-client-okkotsu.png)
+
+![Client ino](screenshot/soal07-client-ino.png)
+
+![Client kusakabe](screenshot/soal07-client-kusakabe.png)
+
+![Client miwa](screenshot/soal07-client-miwa.png)
+
+![Client kugisaki](screenshot/soal07-client-kugisaki.png)
 
 Rekap seluruh client:
 
-| Client       | IP / mask        | Broadcast     | Gateway     | DNS          | Search  | Kebijakan                  |
-| ------------ | ---------------- | ------------- | ----------- | ------------ | ------- | -------------------------- |
-| itadori      | 192.236.2.10/24  | 192.236.2.255 | 192.236.2.1 | .1.2, .1.3   | K50.com | Pool 1 (.2.10–.2.35)       |
-| fushiguro    | 192.236.2.11/24  | 192.236.2.255 | 192.236.2.1 | .1.2, .1.3   | K50.com | Pool 1                     |
-| zenin        | 192.236.2.70/24  | 192.236.2.255 | 192.236.2.1 | .1.2, .1.3   | K50.com | Pool 2 (.2.70–.2.95)       |
-| okkotsu      | 192.236.2.71/24  | 192.236.2.255 | 192.236.2.1 | .1.2, .1.3   | K50.com | Pool 2                     |
-| ino          | 192.236.3.10/24  | 192.236.3.255 | 192.236.3.1 | .1.2, .1.3   | K50.com | Short lease (.3.10–.3.89)  |
-| kusakabe     | 192.236.3.11/24  | 192.236.3.255 | 192.236.3.1 | .1.2, .1.3   | K50.com | Short lease                |
-| miwa (ralwa) | 192.236.3.100/24 | 192.236.3.255 | 192.236.3.1 | .1.2, .1.3   | K50.com | Long lease (.3.100–.3.199) |
-| kugisaki     | 192.236.3.99/24  | 192.236.3.255 | 192.236.3.1 | .1.2, .1.3   | K50.com | Fixed address              |
-
-Setiap client juga dapat ping gateway-nya, `192.236.1.2`, dan `8.8.8.8`.
+| Client    | IP / mask        | Broadcast     | Gateway     | DNS        | Search  | Kebijakan                          |
+| --------- | ---------------- | ------------- | ----------- | ---------- | ------- | ---------------------------------- |
+| itadori   | 192.236.2.10/24  | 192.236.2.255 | 192.236.2.1 | .1.2, .1.3 | K50.com | Pool 1 (.2.10 sampai .2.35)        |
+| fushiguro | 192.236.2.11/24  | 192.236.2.255 | 192.236.2.1 | .1.2, .1.3 | K50.com | Pool 1                             |
+| zenin     | 192.236.2.70/24  | 192.236.2.255 | 192.236.2.1 | .1.2, .1.3 | K50.com | Pool 2 (.2.70 sampai .2.95)        |
+| okkotsu   | 192.236.2.71/24  | 192.236.2.255 | 192.236.2.1 | .1.2, .1.3 | K50.com | Pool 2                             |
+| ino       | 192.236.3.10/24  | 192.236.3.255 | 192.236.3.1 | .1.2, .1.3 | K50.com | Short lease (.3.10 sampai .3.89)   |
+| kusakabe  | 192.236.3.11/24  | 192.236.3.255 | 192.236.3.1 | .1.2, .1.3 | K50.com | Short lease                        |
+| miwa      | 192.236.3.100/24 | 192.236.3.255 | 192.236.3.1 | .1.2, .1.3 | K50.com | Long lease (.3.100 sampai .3.199)  |
+| kugisaki  | 192.236.3.99/24  | 192.236.3.255 | 192.236.3.1 | .1.2, .1.3 | K50.com | Fixed address                      |
 
 #### Cocokkan dengan `dhcpd.leases` di tengen (`/root/soal07-tengen.sh`)
 
@@ -580,19 +563,16 @@ END { for (i in S) printf "%-15s %-18s %-7s ends %s UTC\n", i, M[i], S[i], E[i] 
 ' /var/lib/dhcp/dhcpd.leases | sort -t. -k3,3n -k4,4n
 ```
 
-```
-192.236.2.10    02:42:05:9a:ab:00  active  ends 2026/10/13 13:58:12 UTC
-192.236.2.11    02:42:c3:6e:65:00  active  ends 2026/10/13 13:58:13 UTC
-192.236.2.70    02:42:f6:49:44:00  active  ends 2026/10/13 13:58:15 UTC
-192.236.2.71    02:42:ef:c5:90:00  active  ends 2026/10/13 13:58:17 UTC
-192.236.3.10    02:42:aa:da:e5:00  active  ends 2026/10/13 14:18:19 UTC
-192.236.3.11    02:42:5a:e2:39:00  active  ends 2026/10/13 14:18:20 UTC
-192.236.3.100   02:42:35:f5:07:00  active  ends 2026/10/14 01:48:22 UTC
+```bash
+bash /root/soal07-tengen.sh
+grep -cE "^lease 192\.236\.2\.(3[6-9]|[45][0-9]|6[0-9]) " /var/lib/dhcp/dhcpd.leases
 ```
 
-Pasangan IP dan MAC di server sama dengan yang terlihat di client, tiap IP hanya dipegang satu MAC, dan tidak ada alamat di rentang `.2.36`–`.2.69`. Selisih waktu `ends` juga sesuai kebijakan: 10 menit untuk Network 2, 30 menit untuk ino dan kusakabe, 12 jam untuk miwa.
+![Lease di tengen](screenshot/soal07-leases-tengen.png)
 
-kugisaki tidak muncul di file ini. `dhcpd` tidak mencatat alamat `fixed-address` ke `dhcpd.leases`, sehingga reservasinya dibuktikan dari sisi client (soal 6).
+- Pasangan IP dan MAC di server sama dengan yang terlihat di client, dan tiap IP hanya dipegang satu MAC, jadi tidak ada alamat yang bertabrakan.
+- Jumlah lease di rentang terlarang `.2.36` sampai `.2.69` adalah `0`.
+- kugisaki tidak muncul di file ini. `dhcpd` tidak mencatat alamat `fixed-address` ke `dhcpd.leases`, sehingga reservasinya dibuktikan dari sisi client (soal 6).
 
 ----
 
@@ -611,56 +591,41 @@ echo "===== RINGKASAN ====="
 grep -E "DHCP-Message|Your-IP|Gateway-IP|Server-ID|Lease-Time" /root/soal08-dora.txt
 ```
 
-Filter `udp[36:6]` mencocokkan field `chaddr` dengan MAC itadori, supaya paket renew dari client lain tidak ikut terhitung.
+Filter `udp[36:6]` mencocokkan field `chaddr` dengan MAC itadori, supaya paket renew dari client lain tidak ikut terhitung. `timeout 60` membuat capture berhenti sendiri kalau dalam 60 detik tidak ada paket.
 
 #### Urutan pengujian
 
 ```bash
 ifdown eth0                     # 1. itadori: lepas lease lama
 bash /root/soal08-tengen.sh     # 2. tengen: mulai capture
-ifup eth0                       # 3. itadori: minta lease baru
+ifup eth0                       # 3. itadori: minta lease baru (dalam 60 detik)
 ```
 
 `ifdown` dijalankan lebih dulu supaya paket DHCPRELEASE tidak ikut masuk ke dalam empat paket yang ditangkap.
 
 #### Hasil capture
 
-Capture lengkap ada di [script/soal08/soal08-dora.txt](script/soal08/soal08-dora.txt). Ringkasannya:
+Paket Discover dan Offer:
 
-```
-13:49:45.633291 192.236.4.1.67 > 192.236.4.10.67: BOOTP/DHCP, Request from 02:42:05:9a:ab:00, hops 1, xid 0x4ee63377
-	  Gateway-IP 192.236.2.1
-	    DHCP-Message (53), length 1: Discover
-13:49:45.633432 192.236.4.10.67 > 192.236.2.1.67: BOOTP/DHCP, Reply, hops 1, xid 0x4ee63377
-	  Your-IP 192.236.2.10
-	  Gateway-IP 192.236.2.1
-	    DHCP-Message (53), length 1: Offer
-	    Server-ID (54), length 4: 192.236.4.10
-	    Lease-Time (51), length 4: 600
-13:49:45.644478 192.236.4.1.67 > 192.236.4.10.67: BOOTP/DHCP, Request from 02:42:05:9a:ab:00, hops 1, xid 0x4ee63377
-	  Gateway-IP 192.236.2.1
-	    DHCP-Message (53), length 1: Request
-	    Requested-IP (50), length 4: 192.236.2.10
-	    Server-ID (54), length 4: 192.236.4.10
-13:49:45.645695 192.236.4.10.67 > 192.236.2.1.67: BOOTP/DHCP, Reply, hops 1, xid 0x4ee63377
-	  Your-IP 192.236.2.10
-	  Gateway-IP 192.236.2.1
-	    DHCP-Message (53), length 1: ACK
-	    Server-ID (54), length 4: 192.236.4.10
-	    Lease-Time (51), length 4: 600
-```
+![DORA bagian 1](screenshot/soal08-dora-1.png)
+
+Paket Request, ACK, dan ringkasan:
+
+![DORA bagian 2](screenshot/soal08-dora-2.png)
 
 #### Analisis
 
-| Field                    | Nilai                        | Keterangan                                              |
-| ------------------------ | ---------------------------- | ------------------------------------------------------- |
-| Urutan pesan             | Discover → Offer → Request → ACK | Keempatnya memakai `xid 0x4ee63377` yang sama        |
-| Alamat server            | 192.236.4.10                 | Server-ID (option 54), yaitu tengen                     |
-| Alamat yang diberikan    | 192.236.2.10                 | `Your-IP` (yiaddr), dari Pool 1 milik itadori           |
-| Lease time               | 600 detik                    | Option 51, sesuai `default-lease-time` Network 2        |
-| giaddr                   | 192.236.2.1                  | `Gateway-IP`, yaitu `eth2` jichi                        |
+| Field                 | Nilai                            | Keterangan                                       |
+| --------------------- | -------------------------------- | ------------------------------------------------ |
+| Urutan pesan          | Discover → Offer → Request → ACK | Keempatnya memakai `xid 0xab700a7c` yang sama    |
+| Alamat server         | 192.236.4.10                     | Server-ID (option 54), yaitu tengen              |
+| Alamat yang diberikan | 192.236.2.10                     | `Your-IP` (yiaddr), dari Pool 1 milik itadori    |
+| Lease time            | 600 detik                        | Option 51, sesuai `default-lease-time` Network 2 |
+| giaddr                | 192.236.2.1                      | `Gateway-IP`, yaitu `eth2` jichi                 |
 
 Nilai giaddr `192.236.2.1` adalah alamat `eth2` jichi, interface yang menerima broadcast dari itadori di Network 2. Dari nilai inilah tengen tahu bahwa request berasal dari subnet `192.236.2.0/24` dan harus dilayani dari scope Network 2. Paket Discover dan Request tiba dari `192.236.4.1` (alamat `eth4` jichi) dengan `hops 1`, dan balasan server dikirim unicast ke `192.236.2.1`, yang menunjukkan request memang lewat relay.
+
+Option `Unknown (119), length 9: 3.75.53.48.3.99.111.109.0` adalah domain-search `K50.com` dalam format label DNS: `3` diikuti `75.53.48` (`K50`), `3` diikuti `99.111.109` (`com`), lalu `0` sebagai penutup.
 
 ----
 
@@ -699,62 +664,50 @@ ip -br a show eth0
 ip route
 ```
 
+`udhcpc -n -t 3 -T 2` membatasi client mencoba tiga kali dengan jeda dua detik, lalu menyerah. Tanpa batas ini, client akan terus mencoba tanpa henti saat relay mati.
+
 #### Hentikan relay, lalu minta lease dari ino
 
 ```bash
 bash /root/soal09-jichi.sh down     # jichi
+```
+
+![Relay dimatikan](screenshot/soal09-relay-down-jichi.png)
+
+```bash
 sh /root/soal09-client.sh           # ino
 ```
 
-```
-udhcpc: started, v1.37.0
-udhcpc: broadcasting discover
-udhcpc: broadcasting discover
-udhcpc: broadcasting discover
-udhcpc failed to get a DHCP lease
-udhcpc: no lease, failing
->> GAGAL: tidak ada DHCPOFFER (relay mati?)
-eth0             UNKNOWN        fe80::42:aaff:feda:e500/64
-```
+![Gejala di ino](screenshot/soal09-gejala-ino.png)
 
 Gejala: ino mengirim DHCPDISCOVER tiga kali tanpa pernah menerima DHCPOFFER, `eth0` tidak punya alamat IPv4, dan tabel routing kosong (tidak ada default gateway). Broadcast client berhenti di jichi karena tidak ada lagi yang meneruskannya ke tengen.
+
+Setelah `down`, script jichi bisa saja masih menampilkan satu baris PID `dhcrelay`. Itu proses yang baru dihentikan dan belum hilang dari tabel proses saat `pgrep` berjalan. Relay benar-benar berhenti, terlihat dari ino yang gagal mendapat lease.
 
 #### Pulihkan relay, lalu ulangi dari ino
 
 ```bash
 bash /root/soal09-jichi.sh up       # jichi
+```
+
+![Relay dipulihkan](screenshot/soal09-relay-up-jichi.png)
+
+```bash
 sh /root/soal09-client.sh           # ino
 ping -c 2 192.236.3.1
+cat /etc/resolv.conf
 ```
 
-```
-Requesting: eth2 as upstream: N downstream: Y
-Requesting: eth3 as upstream: N downstream: Y
-Requesting: eth4 as upstream: Y downstream: N
-317 /usr/sbin/dhcrelay -q -id eth2 -id eth3 -iu eth4 192.236.4.10
-```
+![ino pulih](screenshot/soal09-pulih-ino.png)
 
-```
-udhcpc: broadcasting discover
-udhcpc: broadcasting select for 192.236.3.10, server 192.236.4.10
-udhcpc: lease of 192.236.3.10 obtained from 192.236.4.10, lease time 1800
-eth0             UNKNOWN        192.236.3.10/24
-default via 192.236.3.1 dev eth0 metric 55916
-192.236.3.0/24 dev eth0 proto kernel scope link src 192.236.3.10
-2 packets transmitted, 2 received, 0% packet loss, time 1001ms
-search K50.com
-nameserver 192.236.1.2
-nameserver 192.236.1.3
-```
-
-Setelah relay pulih, ino kembali mendapat `192.236.3.10` dari pool short lease dengan lease 1800 detik dan gateway `192.236.3.1`, sama seperti sebelum gangguan.
+Setelah relay pulih, ino kembali mendapat alamat dari pool short lease (`.3.10` sampai `.3.89`) dengan lease 1800 detik, gateway `192.236.3.1` seperti sebelum gangguan, dan DNS serta domain-search kembali terpasang.
 
 ----
 
 ### Soal 10: Autostart dan Ketahanan Setelah Restart
 > Setelah gangguan Shibuya tertangani, pastikan pemulihan bertahan setelah restart. Aktifkan autostart DHCP Server pada tengen dan DHCP Relay pada jichi, lalu restart kedua node. Verifikasi status layanan, IP, gateway, lease, dan konektivitas client Network 2–3. Pastikan kebijakan Pool 1, Pool 2, short lease, long lease, dan fixed address tetap berlaku.
 
-Image `debinet` tidak memakai systemd, sehingga `systemctl enable` tidak tersedia. Sebagai gantinya, image ini menjalankan `/root/init.sh` secara otomatis setiap node boot, dan direktori `/root` tersimpan permanen. Autostart dipasang di file tersebut.
+Image `debinet` tidak memakai systemd, sehingga `systemctl enable` tidak tersedia. Sebagai gantinya, image ini menjalankan `/root/init.sh` secara otomatis setiap node boot, dan direktori `/root` serta `/etc/network` tersimpan permanen. Autostart dipasang di file tersebut.
 
 #### `/root/init.sh` di tengen
 
@@ -773,75 +726,75 @@ bash /root/soal06-tengen.sh > /root/init.log 2>&1
 } > /root/init.log 2>&1
 ```
 
-Script yang dipanggil memeriksa dulu apakah paketnya sudah terpasang, menulis ulang konfigurasi, lalu menyalakan layanan, sehingga aman dijalankan berulang kali.
-
 ```bash
 chmod +x /root/init.sh
 ```
 
+Script yang dipanggil memeriksa dulu apakah paketnya sudah terpasang, menulis ulang konfigurasi, lalu menyalakan layanan, sehingga aman dijalankan berulang kali. Ketika container node dibuat ulang (misalnya saat project dibuka kembali), paket `isc-dhcp-relay` dan `isc-dhcp-server` ikut hilang; `init.sh` memasangnya ulang secara otomatis lewat internet, lalu menyalakan layanannya tanpa perintah manual.
+
 #### Restart jichi dan tengen, lalu verifikasi
 
-Kedua node di-stop lalu di-start dari GNS3. Tanpa menjalankan perintah apa pun secara manual:
-
-jichi:
+Seluruh node di-stop lalu di-start dari GNS3. Tanpa menjalankan perintah apa pun secara manual:
 
 ```bash
-ip -br a
+ip -br a                            # jichi
 sysctl net.ipv4.ip_forward
 iptables -t nat -S POSTROUTING
 ps -e -o pid,args | grep dhcrelay
 cat /etc/default/isc-dhcp-relay
 ```
 
-```
-eth0 UNKNOWN 192.168.122.149/24
-eth1 UNKNOWN 192.236.1.1/24 fe80::42:5aff:feca:7801/64
-eth2 UNKNOWN 192.236.2.1/24 fe80::42:5aff:feca:7802/64
-eth3 UNKNOWN 192.236.3.1/24 fe80::42:5aff:feca:7803/64
-eth4 UNKNOWN 192.236.4.1/24 fe80::42:5aff:feca:7804/64
-net.ipv4.ip_forward = 1
--A POSTROUTING -s 192.236.0.0/16 -o eth0 -j MASQUERADE
-    126 /usr/sbin/dhcrelay -q -id eth2 -id eth3 -iu eth4 192.236.4.10
-SERVERS="192.236.4.10"
-INTERFACES=""
-OPTIONS="-id eth2 -id eth3 -iu eth4"
-```
-
-tengen:
+![jichi setelah restart](screenshot/soal10-restart-jichi.png)
 
 ```bash
-ip -br a show eth0
+ip -br a show eth0                  # tengen
 ip route
 service isc-dhcp-server status
 ps -e -o pid,args | grep dhcpd
 ```
 
-```
-eth0 UNKNOWN 192.236.4.10/24 fe80::42:d1ff:fe6f:8400/64
-default via 192.236.4.1 dev eth0
-Status of ISC DHCPv4 server: dhcpd is running.
-    126 /usr/sbin/dhcpd -4 -q -cf /etc/dhcp/dhcpd.conf eth0
-```
+![tengen setelah restart](screenshot/soal10-restart-tengen.png)
 
-#### Minta lease ulang di seluruh client
+IP, forwarding, NAT, relay di jichi, dan DHCP server di tengen langsung aktif setelah boot. PID `dhcrelay` dan `dhcpd` yang kecil menunjukkan keduanya dinyalakan oleh `init.sh` sejak awal boot.
+
+#### Minta lease ulang di client
+
+Satu client untuk tiap kebijakan:
 
 ```bash
 ifdown eth0; ifup eth0
 ip route
-ping -c 1 <gateway>
-ping -c 1 8.8.8.8
+ping -c 2 192.236.X.1
+ping -c 2 8.8.8.8
 ```
 
-| Client       | IP            | Lease | Gateway     | Ping gateway | Ping 8.8.8.8 | `search K50.com` | Kebijakan     |
-| ------------ | ------------- | ----- | ----------- | ------------ | ------------ | ---------------- | ------------- |
-| itadori      | 192.236.2.10  | 600   | 192.236.2.1 | ok           | ok           | ada              | Pool 1        |
-| fushiguro    | 192.236.2.11  | 600   | 192.236.2.1 | ok           | ok           | ada              | Pool 1        |
-| zenin        | 192.236.2.70  | 600   | 192.236.2.1 | ok           | ok           | ada              | Pool 2        |
-| okkotsu      | 192.236.2.71  | 600   | 192.236.2.1 | ok           | ok           | ada              | Pool 2        |
-| ino          | 192.236.3.10  | 1800  | 192.236.3.1 | ok           | ok           | ada              | Short lease   |
-| kusakabe     | 192.236.3.11  | 1800  | 192.236.3.1 | ok           | ok           | ada              | Short lease   |
-| miwa (ralwa) | 192.236.3.100 | 43200 | 192.236.3.1 | ok           | ok           | ada              | Long lease    |
-| kugisaki     | 192.236.3.99  | 600   | 192.236.3.1 | ok           | ok           | ada              | Fixed address |
+Pool 1 (itadori):
+
+![itadori setelah restart](screenshot/soal10-lease-itadori.png)
+
+Pool 2 (zenin):
+
+![zenin setelah restart](screenshot/soal10-lease-zenin.png)
+
+Short lease (ino):
+
+![ino setelah restart](screenshot/soal10-lease-ino.png)
+
+Long lease (miwa):
+
+![miwa setelah restart](screenshot/soal10-lease-miwa.png)
+
+Fixed address (kugisaki):
+
+![kugisaki setelah restart](screenshot/soal10-lease-kugisaki.png)
+
+| Client   | IP            | Lease | Gateway     | Ping gateway | Ping 8.8.8.8 | Kebijakan     |
+| -------- | ------------- | ----- | ----------- | ------------ | ------------ | ------------- |
+| itadori  | 192.236.2.10  | 600   | 192.236.2.1 | ok           | ok           | Pool 1        |
+| zenin    | 192.236.2.70  | 600   | 192.236.2.1 | ok           | ok           | Pool 2        |
+| ino      | 192.236.3.10  | 1800  | 192.236.3.1 | ok           | ok           | Short lease   |
+| miwa     | 192.236.3.100 | 43200 | 192.236.3.1 | ok           | ok           | Long lease    |
+| kugisaki | 192.236.3.99  | 600   | 192.236.3.1 | ok           | ok           | Fixed address |
 
 #### Lease di tengen setelah restart
 
@@ -849,63 +802,75 @@ ping -c 1 8.8.8.8
 bash /root/soal07-tengen.sh
 ```
 
-```
-192.236.2.10    02:42:05:9a:ab:00  active  ends 2026/10/13 14:08:40 UTC
-192.236.2.11    02:42:c3:6e:65:00  active  ends 2026/10/13 14:08:41 UTC
-192.236.2.70    02:42:f6:49:44:00  active  ends 2026/10/13 14:08:42 UTC
-192.236.2.71    02:42:ef:c5:90:00  active  ends 2026/10/13 14:08:43 UTC
-192.236.3.10    02:42:aa:da:e5:00  active  ends 2026/10/13 14:28:45 UTC
-192.236.3.11    02:42:5a:e2:39:00  active  ends 2026/10/13 14:28:47 UTC
-192.236.3.100   02:42:35:f5:07:00  active  ends 2026/10/14 01:58:49 UTC
-```
+![Lease tengen setelah restart](screenshot/soal10-leases-tengen.png)
 
-Setelah restart, DHCP Server dan DHCP Relay hidup sendiri, setiap client menerima alamat yang sama seperti sebelumnya, dan seluruh kebijakan (Pool 1, Pool 2, short lease, long lease, fixed address) tetap berlaku.
+Setelah restart, DHCP Server dan DHCP Relay hidup sendiri, setiap client menerima alamat dari pool yang benar, dan seluruh kebijakan (Pool 1, Pool 2, short lease, long lease, fixed address) tetap berlaku.
+
+----
+
+### Soal 11:
+> Utahime dan Shoko ditugaskan membangun sistem penamaan domain resmi agar seluruh pos tidak perlu menghafal alamat IP mentah. Konfigurasikan BIND9 pada utahime sebagai DNS Master dan shoko sebagai DNS Slave untuk mengelola domain jujutsu.<xxxx>.com. Atur SOA record, NS delegasi untuk kedua server, dan terapkan allow-transfer dari Master ke Slave. Pastikan file zona berhasil tersinkronisasi otomatis ke shoko saat nomor serial di utahime dinaikkan, lalu buktikan dengan melakukan query dig ke kedua server dari salah satu client.
+
+----
+
+### Soal 12:
+> Peta domain harus memetakan pintu masuk utama dan tetap bisa mencari alamat di luar kawasan Shibuya. Pada utahime, buat A record jujutsu.<xxxx>.com yang mengarah ke gojo, serta CNAME www yang merujuk ke domain utama tersebut. Buat pula Reverse DNS (zona PTR) untuk melacak IP gojo kembali ke domain resminya, dan aktifkan fitur DNS Forwarder pada BIND9 mengarah ke IP gateway internet (192.168.122.1). Uji dari client dengan dig untuk mengecek CNAME, PTR, dan buktikan client tetap bisa melakukan ping ke domain internet seperti google.com.
+
+----
+
+### Soal 13:
+> Kepala Sekolah Yaga dan Inumaki mendirikan database terpusat yang redundan agar log aktivitas kutukan tetap aman tersimpan. Konfigurasikan MariaDB pada yaga sebagai DB-Master dan inumaki sebagai DB-Slave. Buat database db_shibuya_<xxxx> beserta tabel request_logs di Master, aktifkan binary logging (log-bin, server-id), lalu hubungkan inumaki sebagai Slave yang menyalin data secara realtime dengan CHANGE MASTER TO. Berikan hak akses remote bagi seluruh node di Network 4, lalu buktikan replikasi berhasil dengan memasukkan data baru di Master dan memeriksa hasilnya di Slave.
+
+----
+
+### Soal 14:
+> Para penyihir lapangan bersiaga di Data Center sebagai pekerja backend untuk memproses aplikasi. Pasang Nginx dan PHP-FPM pada maki dan panda untuk menyajikan web frontend yang menampilkan hostname masing-masing. Pada nanami, todo, dan kirara, siapkan layanan API yang mencatat log request ke database yaga. Konfigurasikan virtual host agar worker merespons domain layanan yang ditentukan. Batasi akses langsung dari klien ke worker, web worker hanya menerima trafik melalui jalur proxy web yang ditentukan, sedangkan worker API hanya menerima trafik melalui geto. Uji bahwa akses langsung dari klien ditolak, sementara akses melalui reverse proxy tetap berhasil.
+
+----
+
+### Soal 15:
+> Geto bertugas mengendalikan pembagian beban request API di internal Data Center agar server tidak tumbang bersamaan. Konfigurasikan Nginx pada geto sebagai Load Balancer internal dengan upstream api_cluster yang mengarahkan trafik ke nanami dan todo. Terapkan algoritma Weighted Round Robin dengan bobot 3:1, di mana nanami menerima porsi beban tiga kali lebih banyak daripada todo. Buktikan distribusi beban ini dengan melakukan loop request berulang kali ke geto dari jaringan lokal Data Center dan periksa rasio responnya.
+
+----
+
+### Soal 16:
+> Gojo berdiri di perbatasan DMZ sebagai gerbang publik tunggal bagi seluruh client dari luar maupun dalam. Konfigurasikan Nginx pada gojo untuk melayani domain jujutsu.<xxxx>.com dan www.jujutsu.<xxxx>.com menggunakan metode Path-Based Routing. Atur agar request root (/) diteruskan secara Round Robin ke worker frontend (maki dan panda), sedangkan request ke path /api diteruskan langsung ke geto. Uji dari client Divisi A atau B bahwa akses ke web utama dibalas oleh Maki/Panda, sedangkan akses ke /api diteruskan dan dijawab oleh Nanami/Todo.
+
+----
+
+### Soal 17:
+> Komando pusat perlu mengetahui IP asli klien yang mengirimkan request tanpa tertukar dengan IP proxy perantara. Konfigurasikan gojo dan geto agar meneruskan informasi alamat klien melalui header X-Real-IP dan X-Forwarded-For. Pastikan geto hanya mempercayai informasi alamat klien yang diterima dari proxy terpercaya, dan skrip API menyimpan alamat klien yang telah diverifikasi ke kolom client_ip pada tabel request_logs di database yaga. Uji dengan mengirimkan request dari klien Network 2 dan Network 3 ke endpoint /api, kemudian periksa database untuk memastikan alamat yang tercatat sesuai dengan IP klien asal, bukan IP gojo atau geto.
+
+----
+
+### Soal 18:
+> nanami dan todo merupakan worker API utama, sedangkan kirara disiapkan sebagai worker cadangan. Konfigurasikan upstream api_cluster pada geto agar kirara menjadi server backup, serta terapkan passive health check dengan parameter max_fails=2 dan fail_timeout=5s pada worker API utama. Pastikan kirara menjalankan layanan API yang kompatibel dengan endpoint utama. Simulasikan gangguan dengan menghentikan layanan Nginx atau layanan API pada nanami dan todo. Buktikan dari klien bahwa request ke /api dialihkan ke kirara dan menghasilkan respons API yang valid tanpa error 502 Bad Gateway.
+
+----
+
+### Soal 19:
+> gojo bertugas mengoptimalkan layanan web sekaligus membatasi request berlebihan. Konfigurasikan Nginx Proxy Caching untuk halaman web frontend dengan masa berlaku cache 10 menit dan tambahkan header X-Cache-Status. Terapkan rate limiting pada path /api dengan batas 10 request per detik per IP klien. Buktikan bahwa request ke halaman web yang memenuhi syarat cache menghasilkan status MISS pada akses awal dan HIT pada akses berikutnya. Uji rate limiting secara terpisah dengan mengirimkan request beruntun ke /api, kemudian catat status respons yang dihasilkan ketika batas terlampaui.
+
+----
+
+### Soal 20:
+> Sebelum Curtain di Shibuya resmi dibuka, Kusakabe memimpin audit untuk menguji kapasitas layanan. Dari terminal kusakabe, jalankan benchmark menggunakan Apache Benchmark dengan parameter -n 600 -c 30 menuju http://jujutsu.<xxxx>.com/. Catat Requests per Second (RPS), latensi, dan jumlah request yang gagal. Lakukan pengujian tambahan pada endpoint /api untuk mengamati efek rate limiting. Bandingkan hasil pengujian baseline dengan hasil ketika rate limiting aktif, serta gunakan access log gojo untuk membedakan kegagalan aplikasi, koneksi, dan request yang ditolak oleh kebijakan rate limit.
 
 ----
 
 ## Daftar Script
 
-| Soal | Node            | File                                                                                                         |
-| ---- | --------------- | ------------------------------------------------------------------------------------------------------------ |
-| 1    | jichi           | [soal01-jichi.sh](script/soal01/soal01-jichi.sh), [interfaces/](script/soal01/interfaces/)                   |
-| 2    | tengen          | [soal02-tengen.sh](script/soal02/soal02-tengen.sh)                                                           |
-| 3    | jichi, client   | [soal03-jichi.sh](script/soal03/soal03-jichi.sh), [interfaces-client](script/soal03/interfaces-client)       |
-| 4    | tengen          | [soal04-tengen.sh](script/soal04/soal04-tengen.sh)                                                           |
-| 5    | tengen          | [soal05-tengen.sh](script/soal05/soal05-tengen.sh)                                                           |
-| 6    | tengen          | [soal06-tengen.sh](script/soal06/soal06-tengen.sh)                                                           |
-| 7    | tengen, client  | [soal07-tengen.sh](script/soal07/soal07-tengen.sh), [soal07-client.sh](script/soal07/soal07-client.sh)       |
-| 8    | tengen          | [soal08-tengen.sh](script/soal08/soal08-tengen.sh), [soal08-dora.txt](script/soal08/soal08-dora.txt)         |
-| 9    | jichi, client   | [soal09-jichi.sh](script/soal09/soal09-jichi.sh), [soal09-client.sh](script/soal09/soal09-client.sh)         |
-| 10   | tengen, jichi   | [init-tengen.sh](script/soal10/init-tengen.sh), [init-jichi.sh](script/soal10/init-jichi.sh)                 |
+| Soal | Node           | File                                                                                                   |
+| ---- | -------------- | ------------------------------------------------------------------------------------------------------ |
+| 1    | jichi          | [soal01-jichi.sh](script/soal01/soal01-jichi.sh), [interfaces/](script/soal01/interfaces/)             |
+| 2    | tengen         | [soal02-tengen.sh](script/soal02/soal02-tengen.sh)                                                     |
+| 3    | jichi, client  | [soal03-jichi.sh](script/soal03/soal03-jichi.sh), [interfaces-client](script/soal03/interfaces-client) |
+| 4    | tengen         | [soal04-tengen.sh](script/soal04/soal04-tengen.sh)                                                     |
+| 5    | tengen         | [soal05-tengen.sh](script/soal05/soal05-tengen.sh)                                                     |
+| 6    | tengen         | [soal06-tengen.sh](script/soal06/soal06-tengen.sh)                                                     |
+| 7    | tengen, client | [soal07-tengen.sh](script/soal07/soal07-tengen.sh), [soal07-client.sh](script/soal07/soal07-client.sh) |
+| 8    | tengen         | [soal08-tengen.sh](script/soal08/soal08-tengen.sh)                                                     |
+| 9    | jichi, client  | [soal09-jichi.sh](script/soal09/soal09-jichi.sh), [soal09-client.sh](script/soal09/soal09-client.sh)   |
+| 10   | tengen, jichi  | [init-tengen.sh](script/soal10/init-tengen.sh), [init-jichi.sh](script/soal10/init-jichi.sh)           |
 
-Script tengen untuk soal 4, 5, dan 6 masing-masing menulis ulang `dhcpd.conf` secara utuh, jadi konfigurasi final cukup diambil dari script soal 6.
-
-### Soal 11:
-> Utahime dan Shoko ditugaskan membangun sistem penamaan domain resmi agar seluruh pos tidak perlu menghafal alamat IP mentah. Konfigurasikan BIND9 pada utahime sebagai DNS Master dan shoko sebagai DNS Slave untuk mengelola domain jujutsu.<xxxx>.com. Atur SOA record, NS delegasi untuk kedua server, dan terapkan allow-transfer dari Master ke Slave. Pastikan file zona berhasil tersinkronisasi otomatis ke shoko saat nomor serial di utahime dinaikkan, lalu buktikan dengan melakukan query dig ke kedua server dari salah satu client.
-
-### Soal 12:
-> Peta domain harus memetakan pintu masuk utama dan tetap bisa mencari alamat di luar kawasan Shibuya. Pada utahime, buat A record jujutsu.<xxxx>.com yang mengarah ke gojo, serta CNAME www yang merujuk ke domain utama tersebut. Buat pula Reverse DNS (zona PTR) untuk melacak IP gojo kembali ke domain resminya, dan aktifkan fitur DNS Forwarder pada BIND9 mengarah ke IP gateway internet (192.168.122.1). Uji dari client dengan dig untuk mengecek CNAME, PTR, dan buktikan client tetap bisa melakukan ping ke domain internet seperti google.com.
-
-### Soal 13:
-> Kepala Sekolah Yaga dan Inumaki mendirikan database terpusat yang redundan agar log aktivitas kutukan tetap aman tersimpan. Konfigurasikan MariaDB pada yaga sebagai DB-Master dan inumaki sebagai DB-Slave. Buat database db_shibuya_<xxxx> beserta tabel request_logs di Master, aktifkan binary logging (log-bin, server-id), lalu hubungkan inumaki sebagai Slave yang menyalin data secara realtime dengan CHANGE MASTER TO. Berikan hak akses remote bagi seluruh node di Network 4, lalu buktikan replikasi berhasil dengan memasukkan data baru di Master dan memeriksa hasilnya di Slave.
-
-### Soal 14:
-> Para penyihir lapangan bersiaga di Data Center sebagai pekerja backend untuk memproses aplikasi. Pasang Nginx dan PHP-FPM pada maki dan panda untuk menyajikan web frontend yang menampilkan hostname masing-masing. Pada nanami, todo, dan kirara, siapkan layanan API yang mencatat log request ke database yaga. Konfigurasikan virtual host agar worker merespons domain layanan yang ditentukan. Batasi akses langsung dari klien ke worker, web worker hanya menerima trafik melalui jalur proxy web yang ditentukan, sedangkan worker API hanya menerima trafik melalui geto. Uji bahwa akses langsung dari klien ditolak, sementara akses melalui reverse proxy tetap berhasil.
-
-### Soal 15:
-> Geto bertugas mengendalikan pembagian beban request API di internal Data Center agar server tidak tumbang bersamaan. Konfigurasikan Nginx pada geto sebagai Load Balancer internal dengan upstream api_cluster yang mengarahkan trafik ke nanami dan todo. Terapkan algoritma Weighted Round Robin dengan bobot 3:1, di mana nanami menerima porsi beban tiga kali lebih banyak daripada todo. Buktikan distribusi beban ini dengan melakukan loop request berulang kali ke geto dari jaringan lokal Data Center dan periksa rasio responnya.
-
-### Soal 16:
-> Gojo berdiri di perbatasan DMZ sebagai gerbang publik tunggal bagi seluruh client dari luar maupun dalam. Konfigurasikan Nginx pada gojo untuk melayani domain jujutsu.<xxxx>.com dan www.jujutsu.<xxxx>.com menggunakan metode Path-Based Routing. Atur agar request root (/) diteruskan secara Round Robin ke worker frontend (maki dan panda), sedangkan request ke path /api diteruskan langsung ke geto. Uji dari client Divisi A atau B bahwa akses ke web utama dibalas oleh Maki/Panda, sedangkan akses ke /api diteruskan dan dijawab oleh Nanami/Todo.
-
-### Soal 17:
-> Komando pusat perlu mengetahui IP asli klien yang mengirimkan request tanpa tertukar dengan IP proxy perantara. Konfigurasikan gojo dan geto agar meneruskan informasi alamat klien melalui header X-Real-IP dan X-Forwarded-For. Pastikan geto hanya mempercayai informasi alamat klien yang diterima dari proxy terpercaya, dan skrip API menyimpan alamat klien yang telah diverifikasi ke kolom client_ip pada tabel request_logs di database yaga. Uji dengan mengirimkan request dari klien Network 2 dan Network 3 ke endpoint /api, kemudian periksa database untuk memastikan alamat yang tercatat sesuai dengan IP klien asal, bukan IP gojo atau geto.
-
-### Soal 18:
-> nanami dan todo merupakan worker API utama, sedangkan kirara disiapkan sebagai worker cadangan. Konfigurasikan upstream api_cluster pada geto agar kirara menjadi server backup, serta terapkan passive health check dengan parameter max_fails=2 dan fail_timeout=5s pada worker API utama. Pastikan kirara menjalankan layanan API yang kompatibel dengan endpoint utama. Simulasikan gangguan dengan menghentikan layanan Nginx atau layanan API pada nanami dan todo. Buktikan dari klien bahwa request ke /api dialihkan ke kirara dan menghasilkan respons API yang valid tanpa error 502 Bad Gateway.
-
-### Soal 19:
-> gojo bertugas mengoptimalkan layanan web sekaligus membatasi request berlebihan. Konfigurasikan Nginx Proxy Caching untuk halaman web frontend dengan masa berlaku cache 10 menit dan tambahkan header X-Cache-Status. Terapkan rate limiting pada path /api dengan batas 10 request per detik per IP klien. Buktikan bahwa request ke halaman web yang memenuhi syarat cache menghasilkan status MISS pada akses awal dan HIT pada akses berikutnya. Uji rate limiting secara terpisah dengan mengirimkan request beruntun ke /api, kemudian catat status respons yang dihasilkan ketika batas terlampaui.
-
-### Soal 20:
-> Sebelum Curtain di Shibuya resmi dibuka, Kusakabe memimpin audit untuk menguji kapasitas layanan. Dari terminal kusakabe, jalankan benchmark menggunakan Apache Benchmark dengan parameter -n 600 -c 30 menuju http://jujutsu.<xxxx>.com/. Catat Requests per Second (RPS), latensi, dan jumlah request yang gagal. Lakukan pengujian tambahan pada endpoint /api untuk mengamati efek rate limiting. Bandingkan hasil pengujian baseline dengan hasil ketika rate limiting aktif, serta gunakan access log gojo untuk membedakan kegagalan aplikasi, koneksi, dan request yang ditolak oleh kebijakan rate limit.
+Script tengen untuk soal 2, 4, 5, dan 6 masing-masing menulis ulang `dhcpd.conf` secara utuh dan bertahap. Konfigurasi final ada di script soal 6, dan script itulah yang dipanggil `init.sh` saat boot.
