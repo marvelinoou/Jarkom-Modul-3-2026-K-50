@@ -808,10 +808,14 @@ Setelah restart, DHCP Server dan DHCP Relay hidup sendiri, setiap client menerim
 
 ----
 
-### Soal 11:
+### Soal 11: DNS Master–Slave dengan BIND9 dan Zone Transfer
 > Utahime dan Shoko ditugaskan membangun sistem penamaan domain resmi agar seluruh pos tidak perlu menghafal alamat IP mentah. Konfigurasikan BIND9 pada utahime sebagai DNS Master dan shoko sebagai DNS Slave untuk mengelola domain jujutsu.<xxxx>.com. Atur SOA record, NS delegasi untuk kedua server, dan terapkan allow-transfer dari Master ke Slave. Pastikan file zona berhasil tersinkronisasi otomatis ke shoko saat nomor serial di utahime dinaikkan, lalu buktikan dengan melakukan query dig ke kedua server dari salah satu client.
 
+**Ringkasan:** utahime (`192.236.1.2`) dijadikan DNS Master untuk zona `jujutsu.K50.com`, sedangkan shoko (`192.236.1.3`) menjadi DNS Slave yang menyalin zona tersebut lewat zone transfer. Zone transfer hanya diizinkan untuk shoko, dan setiap kenaikan serial di Master otomatis disinkronkan ke Slave. Hasilnya dibuktikan dengan `dig` dari client itadori.
+
 #### Cek kesiapan node **utahime** dan **shoko**
+
+Sebelum konfigurasi, pastikan BIND9 (`named`) sudah terpasang dan `eth0` kedua node sudah memiliki IP statis dari soal 1 (utahime `192.236.1.2`, shoko `192.236.1.3`).
 
 ```bash
 named -v
@@ -822,7 +826,17 @@ ip -br a show eth0
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/e5ff1f02-e7ed-4f93-8ef3-3be82bc87590" />
 
+**Hasil:** `named -v` menampilkan versi BIND9 di kedua node, sehingga paketnya sudah siap dipakai. `ip -br a show eth0` menampilkan IP statis yang benar pada masing-masing node, yaitu `192.236.1.2/24` di utahime dan `192.236.1.3/24` di shoko.
+
 #### Konfigurasi DNS Master **utahime**
+
+Ada tiga file yang disiapkan di Master:
+
+- **`named.conf.options`** membuat BIND listen di semua interface dan menerima query dari siapa saja. Rekursi hanya diizinkan untuk localhost dan `192.236.0.0/16` supaya server tidak menjadi open resolver. `dnssec-validation no` dipakai karena lab ini tidak memakai DNSSEC.
+- **`named.conf.local`** mendeklarasikan zona `jujutsu.K50.com` sebagai `primary`. `notify yes` dan `also-notify` membuat Master memberi tahu shoko setiap ada perubahan, dan `allow-transfer` hanya mengizinkan shoko (`192.236.1.3`) menarik zona.
+- **File zona `db.jujutsu.K50.com`** berisi SOA (serial `2026101401` berformat `YYYYMMDDNN`), dua record NS untuk utahime dan shoko, serta A record untuk keduanya. Kedua NS harus punya A record di dalam zona supaya hostname-nya bisa di-resolve.
+
+Terakhir, kepemilikan file diatur dan konfigurasi divalidasi dengan `named-checkconf` dan `named-checkzone` sebelum BIND dijalankan.
 
 ```bash
 mkdir -p /etc/bind/zones
@@ -875,7 +889,11 @@ named-checkzone jujutsu.K50.com /etc/bind/zones/db.jujutsu.K50.com
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/28adff9d-4edc-4fa9-bd93-7a651c21c7b8" />
 
+**Hasil:** `named-checkconf` mencetak `named.conf OK`, artinya sintaks konfigurasi benar. `named-checkzone` memuat zona dengan serial `2026101401` dan berakhir dengan `OK`, jadi file zona valid dan siap dilayani.
+
 #### Jalankan BIND di utahime
+
+BIND dijalankan, lalu dicek apakah prosesnya hidup dan listen di port 53 (UDP untuk query biasa, TCP untuk zone transfer). Query SOA ke `127.0.0.1` memastikan zona benar-benar dimuat.
 
 ```bash
 service named restart
@@ -888,7 +906,13 @@ dig @127.0.0.1 jujutsu.K50.com SOA +short
 
 <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/cd637e08-4deb-4f8f-8b7d-744cf5ebd807" />
 
-#### Konfigurasi DNS Slave **shoko**
+**Hasil:** proses `named` berjalan, dan port 53 terbuka untuk UDP maupun TCP. Port TCP wajib terbuka karena zone transfer berjalan lewat TCP. Query SOA mengembalikan `utahime.jujutsu.K50.com. admin.jujutsu.K50.com. 2026101401 3600 900 1209600 300`, sesuai isi file zona.
+
+#### Konfigurasi DNS Slave shoko 
+
+Di Slave, zona dideklarasikan sebagai `secondary` dengan `primaries` menunjuk ke utahime. File zona disimpan di `/var/cache/bind`, direktori yang bisa ditulis oleh user `bind` karena Slave akan membuat file ini sendiri dari hasil transfer. `allow-transfer { none; }` mencegah Slave dipakai sebagai sumber transfer, dan `masterfile-format text` membuat salinan zona tersimpan sebagai teks biasa sehingga bisa dibaca dengan `cat`.
+
+**shoko**
 
 ```bash
 cat > /etc/bind/named.conf.options << 'EOF'
@@ -919,7 +943,13 @@ named-checkconf && echo "named.conf OK"
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/89db6d1a-6211-4208-9679-176e549b2f64" />
 
+**Hasil:** `named-checkconf` mencetak `named.conf OK`, jadi konfigurasi Slave valid dan siap dijalankan.
+
 #### Jalankan BIND di shoko dan cek hasil transfer
+
+Begitu `named` di shoko menyala, ia langsung meminta zona dari Master (AXFR). Jeda 5 detik memberi waktu transfer selesai. Hasilnya dicek lewat file zona yang muncul di `/var/cache/bind`, query SOA lokal, dan isi file.
+
+**shoko**
 
 ```bash
 service named restart
@@ -932,7 +962,13 @@ cat /var/cache/bind/db.jujutsu.K50.com
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/bf39223e-3464-4d85-bce2-8e12e4a1f859" />
 
-#### Uji dari client (kondisi awal) **itadori**
+**Hasil:** file `db.jujutsu.K50.com` muncul di `/var/cache/bind/`, padahal tidak dibuat manual di shoko, jadi zona itu hasil transfer dari utahime. Query SOA di shoko mengembalikan serial `2026101401` yang sama dengan Master, dan `cat` menampilkan isi zona (SOA, NS, A) dalam format teks.
+
+#### Uji dari client (kondisi awal) 
+
+Dari itadori, SOA dan NS ditanyakan ke kedua server. Dengan `grep flags`, dicek juga apakah jawaban datang sebagai authoritative answer (flag `aa`).
+
+**itadori**
 
 ```bash
 dig @192.236.1.2 jujutsu.K50.com SOA +short
@@ -945,7 +981,17 @@ dig @192.236.1.3 jujutsu.K50.com SOA | grep flags
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/3b4ac2d2-bea9-4736-83c8-eabf18f4c3ef" />
 
-#### Uji sinkronisasi otomatis (naikkan serial di Master) **utahime**
+**Hasil:**
+
+- Kedua server menjawab SOA dengan serial yang sama (`2026101401`), jadi Master dan Slave sinkron.
+- Query NS dari kedua server menampilkan `utahime.jujutsu.K50.com.` dan `shoko.jujutsu.K50.com.`, sesuai delegasi NS yang dikonfigurasi.
+- Flag `aa` muncul pada jawaban kedua server, jadi shoko menjawab sebagai authoritative dari salinan zonanya sendiri, bukan sekadar meneruskan query ke Master.
+
+#### Uji sinkronisasi otomatis (naikkan serial di Master) 
+
+Satu record baru (`gojo` → `192.236.1.4`) ditambahkan ke zona, lalu serial dinaikkan dari `2026101401` menjadi `2026101402`. Kenaikan serial wajib karena Slave hanya menarik zona jika serial Master lebih besar dari serialnya sendiri. `rndc reload` memuat ulang zona dan memicu NOTIFY ke shoko lewat `also-notify`.
+
+**utahime**
 
 ```bash
 cat >> /etc/bind/zones/db.jujutsu.K50.com << 'EOF'
@@ -961,7 +1007,12 @@ dig @127.0.0.1 jujutsu.K50.com SOA +short
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/50bfa346-ffbb-4509-8c11-9542b27e6168" />
 
-#### Selanjutnya cek di slave **shoko**
+**Hasil:** `named-checkzone` memuat zona dengan serial `2026101402` dan `OK`. Setelah reload, query SOA di Master menampilkan serial baru `2026101402`.
+#### Selanjutnya cek di slave 
+
+Tanpa menyentuh apa pun di shoko, dicek apakah serial dan record baru sudah ikut berpindah.
+
+**shoko**
 
 ```bash
 sleep 3
@@ -972,7 +1023,13 @@ grep gojo /var/cache/bind/db.jujutsu.K50.com
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/ea590063-dd07-4ec3-bb84-09e30c5a0f15" />
 
-Terakhir, bukti dari client **itadori**
+**Hasil:** serial di shoko sudah menjadi `2026101402`, `gojo.jujutsu.K50.com` ter-resolve ke `192.236.1.4`, dan baris `gojo` muncul di file zona shoko. Ini membuktikan sinkronisasi berjalan otomatis (NOTIFY lalu transfer) tanpa konfigurasi tambahan di Slave.
+
+#### Bukti dari client 
+
+Sebagai bukti akhir, itadori membandingkan serial dari kedua server dan me-resolve record baru dari masing-masing.
+
+**itadori**
 
 ```bash
 for s in 192.236.1.2 192.236.1.3; do echo -n "$s -> serial "; dig +short SOA jujutsu.K50.com @$s | awk '{print $3}'; done
@@ -982,9 +1039,13 @@ dig @192.236.1.3 gojo.jujutsu.K50.com +short
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a6eb04aa-1d3e-479a-911a-982b10e31c42" />
 
+**Hasil:** kedua server melaporkan serial `2026101402`, dan keduanya menjawab `gojo.jujutsu.K50.com` dengan `192.236.1.4`. Client mendapat jawaban yang sama dari Master maupun Slave setelah serial dinaikkan.
+
 #### Uji pembatasan zone transfer
 
-shoko *harus diizinkan*
+`allow-transfer` di Master hanya mengizinkan shoko. Pengujiannya dua arah: shoko harus berhasil menarik zona (AXFR), sedangkan client biasa harus ditolak.
+
+**shoko** (harus diizinkan)
 
 ```bash
 dig AXFR jujutsu.K50.com @192.236.1.2
@@ -992,7 +1053,7 @@ dig AXFR jujutsu.K50.com @192.236.1.2
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/b2a8fd0e-7dfa-45cd-9e61-ded53a5f7b6b" />
 
-itadori *harus ditolak*
+**itadori** (harus ditolak)
 
 ```bash
 dig AXFR jujutsu.K50.com @192.236.1.2
@@ -1000,7 +1061,14 @@ dig AXFR jujutsu.K50.com @192.236.1.2
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/0d6af9dc-fccf-4cd3-977e-f90586358637" />
 
-#### Autostart BIND saat node restart **utahime** dan **shoko**
+- Dari shoko, AXFR berhasil dan seluruh isi zona (SOA, NS, A, termasuk `gojo`) ditampilkan, karena `192.236.1.3` ada di daftar `allow-transfer`.
+- Dari itadori, transfer ditolak (`Transfer failed` / status `REFUSED`), karena `192.236.2.x` tidak ada di daftar. Seluruh isi zona tidak bisa diambil sembarang host.
+
+#### Autostart BIND saat node restart 
+
+Image `debinet` tidak memakai systemd, jadi layanan dinyalakan lewat script di `/root/boot.d`, yang dijalankan `init.sh` setiap node boot. Isinya cukup satu baris `service named start`.
+
+**utahime** dan **shoko**
 
 ```bash
 mkdir -p /root/boot.d
@@ -1012,12 +1080,18 @@ cat /root/boot.d/named.sh
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/903ef6e8-a1bc-4487-baba-1da9d76deb8a" />
 
+**Hasil:** `cat` menampilkan `service named start` di kedua node. Setelah restart, BIND di utahime dan shoko menyala otomatis tanpa perintah manual.
+
 ----
 
-### Soal 12:
+### Soal 12: A Record, CNAME, Reverse DNS (PTR), dan DNS Forwarder
 > Peta domain harus memetakan pintu masuk utama dan tetap bisa mencari alamat di luar kawasan Shibuya. Pada utahime, buat A record jujutsu.<xxxx>.com yang mengarah ke gojo, serta CNAME www yang merujuk ke domain utama tersebut. Buat pula Reverse DNS (zona PTR) untuk melacak IP gojo kembali ke domain resminya, dan aktifkan fitur DNS Forwarder pada BIND9 mengarah ke IP gateway internet (192.168.122.1). Uji dari client dengan dig untuk mengecek CNAME, PTR, dan buktikan client tetap bisa melakukan ping ke domain internet seperti google.com.
 
+**Ringkasan:** zona `jujutsu.K50.com` dilengkapi A record untuk domain utama (mengarah ke gojo `192.236.1.4`) dan CNAME `www`. Zona reverse `1.236.192.in-addr.arpa` ditambahkan agar IP gojo bisa dilacak balik ke nama domain. Forwarder ke `192.168.122.1` diaktifkan di utahime dan shoko supaya client tetap bisa me-resolve domain internet seperti `google.com`.
+
 #### Perbarui zona utama
+
+File zona ditulis ulang dengan serial dinaikkan menjadi `2026101403` supaya shoko mau menarik pembaruan. Ada dua record baru: `@ IN A 192.236.1.4` agar `jujutsu.K50.com` mengarah ke gojo, dan `www IN CNAME jujutsu.K50.com.` sebagai alias menuju domain utama. Record utahime, shoko, dan gojo dari soal 11 tetap dimasukkan.
 
 **utahime**
 
@@ -1047,7 +1121,11 @@ named-checkzone jujutsu.K50.com /etc/bind/zones/db.jujutsu.K50.com
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/61c8e2ae-03e6-4cd0-9b21-36de85878776" />
 
+**Hasil:** `named-checkzone` memuat zona dengan serial `2026101403` dan berakhir dengan `OK`, jadi record A dan CNAME yang baru valid.
+
 #### Buat reverse zone
+
+Zona reverse untuk Network 1 bernama `1.236.192.in-addr.arpa` (alamat `192.236.1.0/24` ditulis terbalik). Di dalamnya ada satu PTR: `4 IN PTR jujutsu.K50.com.`, karena angka `4` adalah oktet terakhir IP gojo (`192.236.1.4`). `named.conf.local` ditulis ulang, sehingga zona utama dideklarasikan lagi bersama zona reverse. Zona reverse hanya dilayani utahime sebagai primary, tanpa slave.
 
 **utahime**
 
@@ -1089,7 +1167,11 @@ named-checkzone 1.236.192.in-addr.arpa /etc/bind/zones/db.1.236.192
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/89c41832-ad94-42b5-a589-cd6f50fcff0f" />
 
+**Hasil:** zona `1.236.192.in-addr.arpa` berhasil dimuat (serial `2026101401`, `OK`), jadi file reverse zone dan PTR-nya valid.
+
 #### Aktifkan DNS Forwarder
+
+Opsi `forwarders { 192.168.122.1; }` membuat utahime meneruskan query di luar zona lokalnya (misalnya `google.com`) ke gateway internet. `forward first` berarti forwarder dicoba lebih dulu, dan jika gagal BIND me-resolve sendiri. Zona lokal tetap dijawab langsung tanpa forwarder. Rekursi tetap dibatasi ke localhost dan `192.236.0.0/16`.
 
 **utahime**
 
@@ -1113,7 +1195,11 @@ named-checkconf && echo "named.conf OK"
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/97d31d3e-c973-4135-8904-f15a137efc22" />
 
+**Hasil:** `named-checkconf` mencetak `named.conf OK`, jadi opsi forwarder diterima tanpa error sintaks.
+
 #### Restart BIND dan cek lokal
+
+Setelah restart, kelima jenis query diuji langsung di utahime: SOA, A record domain utama, CNAME `www`, PTR gojo, dan domain internet.
 
 **utahime**
 
@@ -1129,7 +1215,17 @@ dig @127.0.0.1 google.com +short
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/81c06bcc-d3e4-41ea-9d5e-4f58c5d7d8f1" />
 
+**Hasil:**
+
+- SOA menampilkan serial `2026101403`.
+- `jujutsu.K50.com` ter-resolve ke `192.236.1.4` (gojo).
+- `www.jujutsu.K50.com` menampilkan baris CNAME ke `jujutsu.K50.com.` diikuti A record `192.236.1.4`.
+- `-x 192.236.1.4` menampilkan PTR `4.1.236.192.in-addr.arpa.` → `jujutsu.K50.com.`.
+- `google.com` mengembalikan alamat IP, bukti forwarder ke `192.168.122.1` bekerja.
+
 #### Aktifkan forwarder di Slave dan pastikan zona tersinkron
+
+Shoko diberi forwarder yang sama supaya client yang memakai shoko sebagai DNS juga bisa me-resolve domain internet. Setelah restart, dicek apakah zona dengan serial baru sudah ikut tersinkron.
 
 **shoko**
 
@@ -1159,7 +1255,11 @@ dig @127.0.0.1 google.com +short
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/18feb426-59b8-464c-8c33-99e1d1c468f9" />
 
+**Hasil:** serial di shoko sudah `2026101403`, jadi zona baru dari utahime berhasil ditarik. CNAME `www` ikut tersedia di shoko, dan `google.com` ter-resolve lewat forwarder.
+
 #### Uji dari client
+
+Dari itadori, record diuji ke kedua DNS server, lalu client membuktikan bahwa ia tetap bisa menjangkau internet lewat nama domain.
 
 **itadori**
 
@@ -1174,7 +1274,16 @@ ping -c 2 google.com
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/665f8d89-ad50-4e0d-b93b-52421d24ff6d" />
 
+**Hasil:**
+
+- Kedua DNS server menjawab `192.236.1.4` untuk `jujutsu.K50.com`.
+- `www` menampilkan CNAME ke domain utama dan PTR gojo ter-resolve ke `jujutsu.K50.com.`.
+- Flag `aa` muncul pada query PTR karena utahime authoritative untuk zona reverse.
+- `ping google.com` berhasil: nama diselesaikan lewat DNS forwarder, dan paket keluar lewat source NAT di jichi.
+
 #### Uji dari client lain
+
+Pengujian diulang dari client Divisi B (Network 3) untuk memastikan konfigurasi DNS berlaku untuk kedua divisi.
 
 **kusakabe**
 
@@ -1186,12 +1295,18 @@ ping -c 2 google.com
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/ba93ca5f-91d7-4362-b325-af7d4d5b73ef" />
 
+**Hasil:** hasilnya sama dengan itadori: `www` menuju `jujutsu.K50.com.` dan `192.236.1.4`, PTR menghasilkan `jujutsu.K50.com.`, dan ping ke `google.com` berhasil. Ini membuktikan DNS dari DHCP (soal 5) bekerja untuk Divisi A maupun Divisi B.
+
 ----
 
 ### Soal 13:
 > Kepala Sekolah Yaga dan Inumaki mendirikan database terpusat yang redundan agar log aktivitas kutukan tetap aman tersimpan. Konfigurasikan MariaDB pada yaga sebagai DB-Master dan inumaki sebagai DB-Slave. Buat database db_shibuya_<xxxx> beserta tabel request_logs di Master, aktifkan binary logging (log-bin, server-id), lalu hubungkan inumaki sebagai Slave yang menyalin data secara realtime dengan CHANGE MASTER TO. Berikan hak akses remote bagi seluruh node di Network 4, lalu buktikan replikasi berhasil dengan memasukkan data baru di Master dan memeriksa hasilnya di Slave.
 
+**Ringkasan:** yaga (`192.236.4.20`) menjadi DB Master dengan binary log aktif, dan inumaki (`192.236.4.21`) menjadi DB Slave yang menyalin perubahan dari Master secara otomatis. Database `db_shibuya_K50` dengan tabel `request_logs` dibuat di Master dan ikut tereplikasi. User `shibuya` diberi akses remote untuk seluruh node Network 4, dan replikasi dibuktikan dengan insert di Master lalu select di Slave.
+
 #### Cek kesiapan node
+
+MariaDB harus sudah terpasang dan datadir-nya sudah terinisialisasi sebelum replikasi disiapkan. `mariadbd --version` mengecek versi, `ip` mengecek IP statis, dan `ls /var/lib/mysql` memastikan file data awal sudah ada.
 
 **yaga** dan **inumaki**
 
@@ -1205,7 +1320,19 @@ ls /var/lib/mysql | head -5
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a5e43b39-b3d7-4435-b876-caa1db648718" />
 
+**Hasil:** kedua node menampilkan versi MariaDB, IP statis yang benar (`192.236.4.20` untuk yaga dan `192.236.4.21` untuk inumaki), dan isi `/var/lib/mysql`. Artinya MariaDB terpasang dan datadir sudah terinisialisasi.
+
+
 #### Konfigurasi dan jalankan Master
+
+File `99-replication.cnf` berisi empat pengaturan:
+
+- `bind-address = 0.0.0.0` supaya MariaDB bisa diakses dari node lain. Default-nya hanya localhost.
+- `skip-name-resolve` supaya hak akses dicocokkan berdasarkan IP, bukan nama host.
+- `server-id = 1` sebagai ID unik Master dalam topologi replikasi.
+- `log_bin` mengaktifkan binary log, yaitu catatan perubahan yang dibaca Slave.
+
+Folder `/run/mysqld` dibuat manual karena `/run` kosong setiap boot dan image ini tidak memakai systemd.
 
 **yaga**
 
@@ -1229,7 +1356,11 @@ mariadb -e "SHOW VARIABLES WHERE Variable_name IN ('server_id','log_bin');"
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a4800998-c5a6-445e-a9f3-4271eeb9b91e" />
 
+**Hasil:** proses `mariadbd` berjalan dan listen di `0.0.0.0:3306`, jadi bisa dijangkau dari jaringan. `SHOW VARIABLES` menampilkan `server_id = 1` dan `log_bin = ON`, bukti binary logging aktif.
+
 #### Buat user replikasi
+
+User `repl` khusus untuk replikasi, hanya boleh login dari inumaki (`192.236.4.21`), dan hanya diberi hak `REPLICATION SLAVE`. Hak sekecil ini cukup untuk membaca binary log tanpa membuka akses ke data lain.
 
 **yaga**
 
@@ -1240,7 +1371,11 @@ mariadb -t -e "SELECT user, host FROM mysql.user WHERE user='repl';"
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/20c81938-5226-40ed-993a-e60d12b1e706" />
 
+**Hasil:** tabel `mysql.user` menampilkan satu baris `repl` dengan host `192.236.4.21`, jadi hanya inumaki yang bisa memakai akun ini.
+
 #### Buat database, tabel, dan user remote Network 4
+
+Master dibuatkan database `db_shibuya_K50` dengan tabel `request_logs` (kolom `id`, `worker`, `client_ip`, `path`, `created_at`). `client_ip` dibuat `VARCHAR(45)` agar muat untuk alamat IPv4 maupun IPv6. User `shibuya@'192.236.4.%'` diberi hak penuh atas database ini. Wildcard `%` pada host membuat seluruh node Network 4 (`192.236.4.x`) bisa mengakses database secara remote, sesuai permintaan soal.
 
 **yaga**
 
@@ -1266,7 +1401,11 @@ mariadb -t -e "SELECT user, host FROM mysql.user WHERE user IN ('shibuya','repl'
 
 <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/f0fb1ff6-a35e-4c12-ba8b-0a7fd84bf856" />
 
+**Hasil:** `db_shibuya_K50` muncul di daftar database, `DESCRIBE` menampilkan kelima kolom `request_logs`, dan `mysql.user` memuat `repl@192.236.4.21` serta `shibuya@192.236.4.%`.
+
 #### Cek file binlog di Master
+
+Nama file binlog dan posisinya dibutuhkan saat menghubungkan Slave. Perintah ini juga memastikan perubahan tadi (pembuatan user, database, tabel) sudah tercatat.
 
 **yaga**
 
@@ -1276,7 +1415,11 @@ mariadb -t -e "SHOW BINARY LOGS; SHOW MASTER STATUS;"
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/d0964509-f656-49cb-b20a-11b4b5f4c447" />
 
+**Hasil:** `SHOW BINARY LOGS` menampilkan `mysql-bin.000001`, dan `SHOW MASTER STATUS` menunjukkan file aktif beserta posisinya. Posisinya sudah lebih besar dari `4` karena perintah-perintah tadi sudah tertulis di binlog.
+
 #### Konfigurasi dan jalankan Slave
+
+Slave memakai `server-id = 2` (harus berbeda dari Master), `relay_log` sebagai tempat menampung log yang diterima dari Master, dan `read_only = 1` agar data hanya berubah lewat replikasi, bukan lewat penulisan langsung ke Slave.
 
 **inumaki**
 
@@ -1300,7 +1443,11 @@ mariadb -e "SHOW VARIABLES WHERE Variable_name IN ('server_id','read_only');"
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/86d010c1-b22d-44c1-9272-51d99df47635" />
 
+**Hasil:** `mariadbd` berjalan di inumaki, `server_id = 2`, dan `read_only = ON`.
+
 #### Hubungkan Slave ke Master
+
+`CHANGE MASTER TO` memberi tahu Slave alamat Master, akun replikasi, serta file dan posisi binlog awal. Memakai `mysql-bin.000001` posisi `4` (awal file) membuat Slave membaca semua perubahan sejak awal, sehingga database, tabel, dan user ikut tereplikasi. `START SLAVE` menjalankan dua thread replikasi (IO dan SQL), lalu statusnya dicek.
 
 **inumaki**
 
@@ -1312,7 +1459,11 @@ mariadb -e "SHOW SLAVE STATUS\G" | egrep "Slave_IO_State|Master_Host|Master_Log_
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/33048fdc-b997-429f-bf5f-69d1253306eb" />
 
+**Hasil:** `Slave_IO_Running` dan `Slave_SQL_Running` bernilai `Yes`, jadi Slave terhubung ke Master dan mengeksekusi log yang diterima. `Master_Host` bernilai `192.236.4.20`, `Last_IO_Error` dan `Last_SQL_Error` kosong, dan `Seconds_Behind_Master` bernilai `0`, artinya tidak ada ketertinggalan data.
+
 #### Cek DB, tabel, dan user sudah tereplikasi
+
+Tidak ada database yang dibuat manual di inumaki. Jika replikasi berjalan, database, tabel, dan user dari Master harus muncul sendiri.
 
 **inumaki**
 
@@ -1323,7 +1474,11 @@ mariadb -t -e "SELECT user, host FROM mysql.user WHERE user IN ('shibuya','repl'
 
 <img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/783a81e7-c67f-46a5-804a-fb6e6b7ca2f4" />
 
+**Hasil:** `db_shibuya_K50`, struktur `request_logs`, serta user `shibuya` dan `repl` sudah ada di inumaki, sama seperti di Master. Berarti perintah DDL dan manajemen user ikut tereplikasi.
+
 #### Bukti replikasi, insert di Master, cek di Slave
+
+Dua baris data uji dimasukkan ke Master. Posisi binlog diperiksa sebelum dan sesudah, lalu isi tabel dibandingkan dengan Slave.
 
 **yaga**
 
@@ -1345,7 +1500,11 @@ mariadb -e "SHOW SLAVE STATUS\G" | egrep "Read_Master_Log_Pos|Exec_Master_Log_Po
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/b22d31e4-b711-44f4-9bf3-effdf36cceeb" />
 
+**Hasil:** di Master, tabel berisi dua baris uji dan posisi binlog bertambah karena insert tercatat. Di Slave, dua baris yang sama (`uji-replikasi-1` dan `uji-replikasi-2`) muncul tanpa diinput manual. `Read_Master_Log_Pos` sama dengan `Exec_Master_Log_Pos` dan `Seconds_Behind_Master` bernilai `0`, artinya semua log dari Master sudah dieksekusi.
+
 #### Tes hak akses remote dari node Network 4
+
+User `shibuya` diuji dari node lain di Network 4 (nanami, `192.236.4.5`) ke Master dan Slave. Alamat nanami cocok dengan host `192.236.4.%`, jadi login seharusnya berhasil. Akun inilah yang nanti dipakai worker API.
 
 **nanami**
 
@@ -1356,8 +1515,12 @@ mariadb -h 192.236.4.21 -u shibuya -pshibuya50 -e "SELECT worker, path FROM db_s
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/9d9e8145-b37d-4479-afbf-f2a9385ee4b7" />
 
+**Hasil:** nanami berhasil login ke yaga dan inumaki dengan user `shibuya` dan membaca data yang sama di kedua server. Hak akses remote untuk Network 4 berfungsi.
+
 #### Autostart MariaDB saat node restart
 /run hilang tiap boot, jadi folder /run/mysqld harus dibuat ulang oleh script boot.
+
+Folder `/run/mysqld` hilang setiap boot, jadi script boot membuatnya lebih dulu sebelum MariaDB dijalankan. Script ini dijalankan `init.sh` tiap node boot.
 
 **yaga** dan **inumaki**
 
@@ -1375,6 +1538,8 @@ cat /root/boot.d/mariadb.sh
 
 <img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/2eb6508a-8641-4874-bbb9-36935496baf8" />
 
+**Hasil:** `cat` menampilkan isi script boot di kedua node: pembuatan `/run/mysqld` lalu `service mariadb start`. MariaDB di yaga dan inumaki akan menyala sendiri setelah restart.
+  
 ----
 
 ### Soal 14:
