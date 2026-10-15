@@ -2225,28 +2225,867 @@ SETUP_EOF
 bash -n /root/setup-gojo-17.sh && echo "script OK" && bash /root/setup-gojo-17.sh
 ```
 
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/4f5409d3-f1ac-459a-99dc-77ba20d6d85f" />
 
+#### Uji dari klien Network 2 dan Network 3
 
+**Klien Network 2: itadori**
 
+```bash
+MYIP=$(ip -4 -br a show eth0 | awk '{print $3}' | cut -d/ -f1)
+echo "IP itadori : $MYIP"
+for i in 1 2 3 4; do curl -s http://jujutsu.K50.com/api; echo; done
+curl -s -D - -o /dev/null http://jujutsu.K50.com/api | egrep -i 'HTTP/|x-gojo|x-upstream|x-client-seen'
+```
 
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/c0f75212-59ad-40be-9490-39d1ff889e9a" />
 
+client_ip kini IP itadori, sedangkan peer_ip tetap IP geto. Itu menunjukkan IP klien tidak tertukar dengan IP proxy.
 
+**Klien Network 3: kusakabe**
 
+```bash
+MYIP=$(ip -4 -br a show eth0 | awk '{print $3}' | cut -d/ -f1)
+echo "IP kusakabe : $MYIP"
+for i in 1 2 3 4; do curl -s http://jujutsu.K50.com/api; echo; done
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/612b742b-1d5c-41e7-aef1-9334628c94eb" />
+
+#### Uji anti-spoof
+
+**Klien memalsukan header lewat gojo: itadori**
+
+```bash
+echo "IP itadori : $(ip -4 -br a show eth0 | awk '{print $3}' | cut -d/ -f1)"
+curl -s -H "X-Real-IP: 1.2.3.4" -H "X-Forwarded-For: 1.2.3.4" http://jujutsu.K50.com/api; echo
+```
+
+**Node tak terpercaya menembak geto langsung: maki**
+
+```bash
+curl -s -H "X-Real-IP: 1.2.3.4" -H "X-Forwarded-For: 1.2.3.4" http://192.236.4.2/api; echo
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/739c27c0-ed65-4bea-bc83-b35490e8aa23" />
+
+#### Bukti dari log nginx
+
+**gojo**
+
+```bash
+tail -n 6 /var/log/nginx/gojo-realip.log
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/3613bcbd-ac3d-473b-ac2b-cd3e35232af8" />
+
+**geto**
+
+```bash
+tail -n 6 /var/log/nginx/geto-realip.log
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/1a7cd8b7-1a26-4912-8925-fa5317751d26" />
+
+**nanami**
+
+```bash
+tail -n 4 /var/log/nginx/api-realip.log
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/75be3d9b-6f9f-46ae-a6bf-1219f3862787" />
+
+#### Periksa database
+
+**yaga**
+
+```bash
+mariadb -t -e "SELECT id, worker, client_ip, path, created_at FROM db_shibuya_K50.request_logs ORDER BY id DESC LIMIT 12;"
+mariadb -t -e "SELECT client_ip, COUNT(*) AS total FROM db_shibuya_K50.request_logs GROUP BY client_ip;"
+```
+
+<img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/46aaab4f-23b0-45ae-9a5e-952c9d7acbb5" />
+
+**inumaki** bukti replikasi
+
+```bash
+mariadb -t -e "SELECT client_ip, COUNT(*) AS total FROM db_shibuya_K50.request_logs GROUP BY client_ip;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/90dcde47-fe44-4ec5-8805-d33f24328942" />
+
+#### Cek autostart
+
+**gojo, geto, nanami, todo, kirara**
+
+```bash
+cat /root/boot.d/*.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/01d06ba0-d5f2-41de-8a91-d6c0e8555d1f" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/4b411db1-ede1-4d8c-8010-7ce6dc48149a" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/0a2a165f-34ff-4ee6-8169-82c2ee716986" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/d4fa2e68-9f74-42cd-b02e-fa10c4628cf4" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/6fba0a97-aae9-4bfc-b4da-1a6e90fac6a0" />
 
 ----
 
 ### Soal 18:
 > nanami dan todo merupakan worker API utama, sedangkan kirara disiapkan sebagai worker cadangan. Konfigurasikan upstream api_cluster pada geto agar kirara menjadi server backup, serta terapkan passive health check dengan parameter max_fails=2 dan fail_timeout=5s pada worker API utama. Pastikan kirara menjalankan layanan API yang kompatibel dengan endpoint utama. Simulasikan gangguan dengan menghentikan layanan Nginx atau layanan API pada nanami dan todo. Buktikan dari klien bahwa request ke /api dialihkan ke kirara dan menghasilkan respons API yang valid tanpa error 502 Bad Gateway.
 
+#### Cek kesiapan kirara
+
+**geto**
+
+```bash
+for h in 192.236.4.5 192.236.4.6 192.236.4.7; do echo -n "$h : "; curl -s -H "Host: jujutsu.K50.com" http://$h/api; echo; done
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/d1feeec6-9cd9-40a1-9ad1-ab5fbcb5f83e" />
+
+#### Konfigurasi geto
+
+**geto**
+
+```bash
+cat > /root/setup-geto-18.sh << 'SETUP_EOF'
+#!/bin/bash
+# /root/setup-geto-18.sh - Soal 18: kirara backup + passive health check
+# (konfigurasi soal 15 dan 17 dipertahankan)
+NANAMI="192.236.4.5"
+TODO="192.236.4.6"
+KIRARA="192.236.4.7"
+GOJO="192.236.1.4"
+
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/jujutsu-lb
+cat > /etc/nginx/sites-available/jujutsu-lb <<'NGEOF'
+upstream api_cluster {
+    zone api_cluster 64k;
+    server __NANAMI__ weight=3 max_fails=2 fail_timeout=5s;
+    server __TODO__ weight=1 max_fails=2 fail_timeout=5s;
+    server __KIRARA__ backup;
+}
+
+# Proxy terpercaya (soal 17)
+geo $realip_remote_addr $from_trusted {
+    default    0;
+    __GOJO__   1;
+}
+map $from_trusted $xff_out {
+    1        "$http_x_forwarded_for, $realip_remote_addr";
+    default  $remote_addr;
+}
+
+log_format geto_realip 'peer=$realip_remote_addr client=$remote_addr xff="$xff_out" up=$upstream_addr ups=$upstream_status "$request" $status';
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.K50.com www.jujutsu.K50.com;
+    access_log /var/log/nginx/geto-realip.log geto_realip;
+
+    set_real_ip_from __GOJO__;
+    real_ip_header X-Real-IP;
+    real_ip_recursive off;
+
+    location /api {
+        proxy_pass http://api_cluster;
+        proxy_connect_timeout 2s;
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_next_upstream_tries 3;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $xff_out;
+        add_header X-Upstream $upstream_addr always;
+        add_header X-Client-Seen $remote_addr always;
+    }
+}
+NGEOF
+sed -i "s/__NANAMI__/$NANAMI/g; s/__TODO__/$TODO/g; s/__KIRARA__/$KIRARA/g; s/__GOJO__/$GOJO/g" /etc/nginx/sites-available/jujutsu-lb
+ln -sf /etc/nginx/sites-available/jujutsu-lb /etc/nginx/sites-enabled/jujutsu-lb
+
+nginx -t || exit 1
+service nginx restart
+
+sleep 1
+echo "===== HASIL geto ====="
+nginx -t 2>&1 | tail -2
+ss -tlnp | grep ':80 '
+grep -A5 'upstream api_cluster' /etc/nginx/sites-available/jujutsu-lb
+grep -nE 'proxy_next_upstream|proxy_connect_timeout' /etc/nginx/sites-available/jujutsu-lb
+SETUP_EOF
+
+bash -n /root/setup-geto-18.sh && echo "script OK" && bash /root/setup-geto-18.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/f98ee5a5-3974-42b6-a54a-a41c9d893fe7" />
+
+#### Baseline (semua worker hidup)
+
+**itadori**
+
+```bash
+for i in $(seq 1 20); do
+  C=$(curl -s -o /tmp/r.json -w "%{http_code}" http://jujutsu.K50.com/api)
+  echo "$C $(grep -o '"worker":"[a-z]*"' /tmp/r.json)"
+done | sort | uniq -c
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/63645348-e3b1-43b9-9cb1-93fb57bbc8fc" />
+
+#### Gangguan 1, hanya nanami mati
+
+**nanami**
+
+```bash
+service nginx stop
+pgrep -a nginx || echo "nginx nanami mati"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/34c93a0c-00f5-4111-bac8-d98d824c1766" />
+
+**geto**
+
+```bash
+curl -s -o /dev/null -w "nanami langsung : %{http_code}\n" -H "Host: jujutsu.K50.com" http://192.236.4.5/api
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/99c0499b-4251-4d1f-8a6a-b12bff781de7" />
+
+**itadori**
+
+```bash
+for i in $(seq 1 20); do
+  C=$(curl -s -o /tmp/r.json -w "%{http_code}" http://jujutsu.K50.com/api)
+  echo "$C $(grep -o '"worker":"[a-z]*"' /tmp/r.json)"
+done | sort | uniq -c
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/4e96dbef-1f29-4d7a-8d82-f4604fe5c977" />
+
+#### Gangguan 2, nanami dan todo mati (bukti utama)
+
+**todo**
+
+```bash
+service nginx stop
+pgrep -a nginx || echo "nginx todo mati"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/89ce74b4-5c39-4b04-87eb-8725789f42a9" />
+
+**itadori**
+
+Satu request dengan header lengkap
+
+```bash
+curl -s -D - http://jujutsu.K50.com/api | egrep -i 'HTTP/|x-gojo|x-upstream|x-client-seen|status|worker'
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/3afa5d5d-0c29-4012-bd3b-0b15d47a90c1" />
+
+Beban beruntun
+
+```bash
+for i in $(seq 1 20); do
+  C=$(curl -s -o /tmp/r.json -w "%{http_code}" http://jujutsu.K50.com/api)
+  echo "$C $(grep -o '"worker":"[a-z]*"' /tmp/r.json)"
+done | sort | uniq -c
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/5c07eb2e-fca0-4e6c-9215-b509c1250e3f" />
+
+Dari klien Network 3 (kusakabe)
+
+```bash
+for i in 1 2 3 4 5; do curl -s -o /dev/null -w "%{http_code} " http://jujutsu.K50.com/api; done; echo
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/88d6df0a-630b-4871-ad42-e201e947bcdd" />
+
+#### Bukti dari log geto dan database
+
+**geto**
+
+```bash
+grep -c 'ups=' /var/log/nginx/geto-realip.log
+tail -n 6 /var/log/nginx/geto-realip.log
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/d47084bc-e61e-4bb3-8339-cd526c98ddba" />
+
+**kirara**
+
+```bash
+tail -n 4 /var/log/nginx/api-realip.log
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/09620e05-8f43-406a-abb1-c5a5c4106a03" />
+
+**yaga**
+
+```bash
+mariadb -t -e "SELECT id, worker, client_ip, path FROM db_shibuya_K50.request_logs ORDER BY id DESC LIMIT 10;"
+mariadb -t -e "SELECT worker, client_ip, COUNT(*) AS total FROM db_shibuya_K50.request_logs GROUP BY worker, client_ip;"
+```
+
+<img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/e038177d-6e0e-4173-bc4c-508d711a2554" />
+
+#### Pemulihan
+
+**nanami dan todo**
+
+```bash
+service nginx start
+sleep 1
+pgrep -a nginx | head -2
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/24d652fc-2bcc-4c5e-bd2c-cd795b3e7635" />
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/64463ec5-5dc8-4f48-ac7b-5e70d0a0abdb" />
+
+**itadori**
+
+```bash
+sleep 6
+for i in $(seq 1 20); do
+  C=$(curl -s -o /tmp/r.json -w "%{http_code}" http://jujutsu.K50.com/api)
+  echo "$C $(grep -o '"worker":"[a-z]*"' /tmp/r.json)"
+done | sort | uniq -c
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/51b94052-888f-475d-8cbd-8b12a4babad6" />
+
 ----
 
 ### Soal 19:
 > gojo bertugas mengoptimalkan layanan web sekaligus membatasi request berlebihan. Konfigurasikan Nginx Proxy Caching untuk halaman web frontend dengan masa berlaku cache 10 menit dan tambahkan header X-Cache-Status. Terapkan rate limiting pada path /api dengan batas 10 request per detik per IP klien. Buktikan bahwa request ke halaman web yang memenuhi syarat cache menghasilkan status MISS pada akses awal dan HIT pada akses berikutnya. Uji rate limiting secara terpisah dengan mengirimkan request beruntun ke /api, kemudian catat status respons yang dihasilkan ketika batas terlampaui.
 
+#### Konfigurasi gojo
+
+**gojo**
+
+```bash
+cat > /root/setup-gojo-19.sh << 'SETUP_EOF'
+#!/bin/bash
+# /root/setup-gojo-19.sh - Soal 19: proxy cache (/) + rate limiting (/api)
+# (konfigurasi soal 16 dan 17 dipertahankan)
+MAKI="192.236.4.3"
+PANDA="192.236.4.4"
+GETO="192.236.4.2"
+
+mkdir -p /var/cache/nginx/frontend
+chown -R www-data:www-data /var/cache/nginx
+
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/jujutsu-proxy
+cat > /etc/nginx/sites-available/jujutsu-proxy <<'NGEOF'
+# Cache halaman frontend: valid 10 menit
+proxy_cache_path /var/cache/nginx/frontend levels=1:2 keys_zone=frontend_cache:10m max_size=100m inactive=10m use_temp_path=off;
+
+# Rate limit: 10 request/detik per IP klien
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
+upstream frontend_cluster {
+    zone frontend_cluster 64k;
+    server __MAKI__;
+    server __PANDA__;
+}
+
+upstream geto_lb {
+    server __GETO__;
+}
+
+log_format gojo_realip '$remote_addr xff="$http_x_forwarded_for" up=$upstream_addr cache=$upstream_cache_status lim=$limit_req_status rt=$request_time "$request" $status';
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.K50.com www.jujutsu.K50.com;
+    access_log /var/log/nginx/gojo-realip.log gojo_realip;
+
+    # Frontend: Round Robin + cache 10 menit
+    location / {
+        proxy_pass http://frontend_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        proxy_cache frontend_cache;
+        proxy_cache_key "$scheme$host$request_uri";
+        proxy_cache_valid 200 10m;
+
+        add_header X-Cache-Status $upstream_cache_status always;
+        add_header X-Gojo-Upstream $upstream_addr always;
+    }
+
+    # API: rate limit, tanpa cache
+    location /api {
+        limit_req zone=api_limit burst=5 nodelay;
+        limit_req_status 429;
+
+        proxy_pass http://geto_lb;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        add_header X-Gojo-Upstream $upstream_addr always;
+    }
+}
+NGEOF
+sed -i "s/__MAKI__/$MAKI/g; s/__PANDA__/$PANDA/g; s/__GETO__/$GETO/g" /etc/nginx/sites-available/jujutsu-proxy
+ln -sf /etc/nginx/sites-available/jujutsu-proxy /etc/nginx/sites-enabled/jujutsu-proxy
+
+nginx -t || exit 1
+service nginx restart
+
+sleep 1
+echo "===== HASIL gojo ====="
+nginx -t 2>&1 | tail -2
+ss -tlnp | grep ':80 '
+grep -nE 'proxy_cache_path|proxy_cache_valid|X-Cache-Status|limit_req' /etc/nginx/sites-available/jujutsu-proxy
+ls -ld /var/cache/nginx/frontend
+SETUP_EOF
+
+bash -n /root/setup-gojo-19.sh && echo "script OK" && bash /root/setup-gojo-19.sh
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/f783a14a-ce06-4072-9468-98ea3750d177" />
+
+#### Bukti cache, MISS lalu HIT
+
+**itadori**
+
+```bash
+for i in 1 2 3 4; do
+  echo "--- request $i"
+  curl -s -D - -o /dev/null "http://jujutsu.K50.com/?uji=19a" | egrep -i 'HTTP/|x-cache-status|x-gojo-upstream'
+done
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/ed4496f7-8734-42cf-ba42-5f25c7fab67f" />
+
+Konten yang sama selama masa cache
+
+```bash
+for i in 1 2 3 4; do curl -s "http://jujutsu.K50.com/?uji=19a" | grep Worker; done
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/09f7ba7c-7421-43ff-8f0e-b4623604dbd7" />
+
+URL berbeda memicu MISS baru (Round Robin maki/panda tetap berjalan di balik cache)
+
+```bash
+for u in 19b 19c 19d 19e; do
+  echo -n "$u -> "; curl -s -D - -o /dev/null "http://jujutsu.K50.com/?uji=$u" | egrep -i 'x-cache-status|x-gojo-upstream' | tr '\r\n' '  '; echo
+done
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/6656f0b8-e3fc-4d0c-8336-b6f4fdfb4e42" />
+
+#### Cache dipakai bersama antar klien
+
+**kusakabe**
+
+```bash
+curl -s -D - -o /dev/null "http://jujutsu.K50.com/?uji=19a" | egrep -i 'HTTP/|x-cache-status'
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a5475219-4ecb-4bcb-a8e3-94fc137f6ec4" />
+
+#### Bukti di sisi gojo
+
+**gojo**
+
+```bash
+ls -R /var/cache/nginx/frontend | head -8
+du -sh /var/cache/nginx/frontend
+grep 'uji=19a' /var/log/nginx/gojo-realip.log | tail -5
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/66ab5200-8857-46b2-ab19-39f6bb31aa87" />
+
+#### Bukti rate limiting di /api
+
+Hitung baris database sebelum uji
+
+**yaga**
+
+```bash
+mariadb -t -e "SELECT COUNT(*) AS sebelum FROM db_shibuya_K50.request_logs;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/6d2b7915-5eed-4995-b7bf-ec962d1c663f" />
+
+#### Request beruntun
+
+**itadori**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" "http://jujutsu.K50.com/api?n=[1-30]" | sort | uniq -c
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/42eda545-d575-4fd0-8067-945901dac0be" />
+
+Detail respons saat batas terlampaui
+
+```bash
+curl -s -i "http://jujutsu.K50.com/api?n=[1-15]" | grep '^HTTP/'
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/3fe785ae-ee6c-47b1-95e5-4c1b948d9b01" />
+
+Kecepatan wajar tetap diterima
+
+```bash
+for i in 1 2 3 4 5; do curl -s -o /dev/null -w "%{http_code} " http://jujutsu.K50.com/api; sleep 1; done; echo
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/7b686ad1-cb9a-42e7-adb4-edd769d4c8cc" />
+
+Bukti dari sisi gojo dan database
+
+**gojo**
+
+```bash
+awk '{print $NF}' /var/log/nginx/gojo-realip.log | sort | uniq -c
+grep -c 'lim=REJECTED' /var/log/nginx/gojo-realip.log
+grep 'lim=REJECTED' /var/log/nginx/gojo-realip.log | tail -2
+grep 'limiting requests' /var/log/nginx/error.log | tail -2
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/89290cd6-908f-4564-a3e8-ff43b0a7fcf0" />
+
+Request yang ditolak punya up=-, artinya tidak diteruskan ke geto.
+
+**yaga**
+
+```bash
+mariadb -t -e "SELECT COUNT(*) AS sesudah FROM db_shibuya_K50.request_logs;"
+mariadb -t -e "SELECT id, worker, client_ip, path FROM db_shibuya_K50.request_logs ORDER BY id DESC LIMIT 5;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/239d81b4-e648-4ef1-9d53-1573027c8bc8" />
+
 ----
 
 ### Soal 20:
 > Sebelum Curtain di Shibuya resmi dibuka, Kusakabe memimpin audit untuk menguji kapasitas layanan. Dari terminal kusakabe, jalankan benchmark menggunakan Apache Benchmark dengan parameter -n 600 -c 30 menuju http://jujutsu.<xxxx>.com/. Catat Requests per Second (RPS), latensi, dan jumlah request yang gagal. Lakukan pengujian tambahan pada endpoint /api untuk mengamati efek rate limiting. Bandingkan hasil pengujian baseline dengan hasil ketika rate limiting aktif, serta gunakan access log gojo untuk membedakan kegagalan aplikasi, koneksi, dan request yang ditolak oleh kebijakan rate limit.
+
+#### Cek kesiapan
+
+**kusakabe**
+
+```bash
+ip -4 -br a show eth0
+cat /etc/resolv.conf
+dig +short jujutsu.K50.com
+ab -V | head -1
+curl -s -o /dev/null -w "%{http_code}\n" http://jujutsu.K50.com/
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/f8511363-405f-4a62-b5f6-f20912aac3a6" />
+
+**gojo**
+
+```bash
+pgrep -a nginx | head -2
+grep -nE 'proxy_cache_valid|limit_req' /etc/nginx/sites-available/jujutsu-proxy
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/c7ee8891-7d00-4e06-ba1a-184fc732a592" />
+
+**gojo**
+
+```bash
+cp /var/log/nginx/gojo-realip.log /root/gojo-realip.soal19.bak
+ls -l /root/gojo-realip.soal19.bak
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/1a91880d-f79c-4b5b-9dbf-87d3002ec503" />
+
+#### Baseline halaman web / (cache aktif)
+
+**gojo**
+
+```bash
+: > /var/log/nginx/gojo-realip.log
+wc -l < /var/log/nginx/gojo-realip.log
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a87952f7-6398-4f05-8cd4-abc4daf16779" />
+
+**kusakabe**
+
+```bash
+ab -n 600 -c 30 http://jujutsu.K50.com/ | tee /tmp/ab-1-root.txt
+```
+
+<img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/a62fb46d-5524-48aa-a17c-3a5fa07c28d7" />
+
+**kusakabe**
+
+```bash
+egrep 'Concurrency Level|Time taken|Complete requests|Failed requests|Connect:|Non-2xx|Requests per second|Time per request|Total:|50%|95%|99%|100%' /tmp/ab-1-root.txt
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a4f6d581-289f-44f9-ba70-b7f05c39ae40" />
+
+**gojo**
+
+```bash
+LOG=/var/log/nginx/gojo-realip.log
+echo "Total baris log : $(wc -l < $LOG)"
+echo "--- status:";   awk '{print $NF}' $LOG | sort | uniq -c
+echo "--- cache:";    grep -o 'cache=[A-Z-]*' $LOG | sort | uniq -c
+echo "--- upstream:"; grep -o 'up=[^ ]*' $LOG | sort | uniq -c
+awk -F'rt=' '{split($2,a," "); s+=a[1]; n++} END{printf "rata-rata rt gojo: %.4f detik (%d request)\n", s/n, n}' $LOG
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/1e463090-260e-422b-b23a-ff09dd1d35de" />
+
+#### /api dengan rate limiting ON
+
+**yaga**
+
+```bash
+mariadb -N -e "SELECT COUNT(*) FROM db_shibuya_K50.request_logs;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/4806e9f6-d3cb-4f12-b026-b34ca60c3d7c" />
+
+**gojo**
+
+```bash
+: > /var/log/nginx/gojo-realip.log
+: > /var/log/nginx/error.log
+wc -l < /var/log/nginx/gojo-realip.log
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/9d157bcb-6036-4afc-803b-af91d7e63bda" />
+
+**kusakabe**
+
+```bash
+ab -n 600 -c 30 http://jujutsu.K50.com/api | tee /tmp/ab-2-api-limit-on.txt
+```
+
+<img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/2fecb9d9-4c76-4b3f-b36e-8b8d47b94dde" />
+
+**kusakabe**
+
+```bash
+egrep 'Concurrency Level|Time taken|Complete requests|Failed requests|Connect:|Non-2xx|Requests per second|Time per request|Total:|50%|95%|99%|100%' /tmp/ab-2-api-limit-on.txt
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/fc85b381-2258-48f6-9d64-488661f7cc92" />
+
+**gojo**
+
+```bash
+LOG=/var/log/nginx/gojo-realip.log
+echo "Total baris log     : $(wc -l < $LOG)"
+echo "--- status:"; awk '{print $NF}' $LOG | sort | uniq -c
+echo "lim=PASSED          : $(grep -c 'lim=PASSED' $LOG)"
+echo "lim=REJECTED        : $(grep -c 'lim=REJECTED' $LOG)"
+echo "--- contoh lolos:";   grep 'lim=PASSED' $LOG | head -2
+echo "--- contoh ditolak:"; grep 'lim=REJECTED' $LOG | head -2
+echo "error.log 'limiting requests': $(grep -c 'limiting requests' /var/log/nginx/error.log)"
+grep 'limiting requests' /var/log/nginx/error.log | tail -1
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/d1da7728-3566-4e9d-87e3-c9013f5b8574" />
+
+**yaga**
+
+```bash
+mariadb -N -e "SELECT COUNT(*) FROM db_shibuya_K50.request_logs;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/9ada1752-083d-4509-b327-758d71aa02e4" />
+
+**kusakabe**
+
+```bash
+ab -l -n 600 -c 30 http://jujutsu.K50.com/api | egrep 'Failed requests|Non-2xx'
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/66993c0e-a40c-4201-8bb6-94d5462068e4" />
+
+#### Baseline /api tanpa rate limit
+
+**gojo**
+
+```bash
+sed -i 's/^\(\s*\)limit_req zone=/\1#limit_req zone=/' /etc/nginx/sites-available/jujutsu-proxy
+grep -n 'limit_req' /etc/nginx/sites-available/jujutsu-proxy
+nginx -t && nginx -s reload
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/2c5ff471-79ef-49ee-80ed-8dfb852c2817" />
+
+**gojo**
+
+```bash
+: > /var/log/nginx/gojo-realip.log
+wc -l < /var/log/nginx/gojo-realip.log
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/5451148e-9e62-4c17-a459-943a42f7d8f0" />
+
+**yaga**
+
+```bash
+mariadb -N -e "SELECT COUNT(*) FROM db_shibuya_K50.request_logs;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/de985d9e-abed-40e7-9f26-65492bd69ecf" />
+
+**kusakabe**
+
+```bash
+ab -n 600 -c 30 http://jujutsu.K50.com/api | tee /tmp/ab-3-api-limit-off.txt
+```
+
+<img width="1920" height="1020" alt="image" src="https://github.com/user-attachments/assets/9d3d17a5-6e3a-4fed-93a8-43591113a48e" />
+
+**kusakabe**
+
+```bash
+egrep 'Concurrency Level|Time taken|Complete requests|Failed requests|Connect:|Non-2xx|Requests per second|Time per request|Total:|50%|95%|99%|100%' /tmp/ab-3-api-limit-off.txt
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/6e5b1d01-3e7f-486d-94b4-dae08b649781" />
+
+**gojo**
+
+```bash
+LOG=/var/log/nginx/gojo-realip.log
+echo "Total baris log : $(wc -l < $LOG)"
+echo "--- status:";   awk '{print $NF}' $LOG | sort | uniq -c
+echo "--- limit:";    grep -o 'lim=[A-Z-]*' $LOG | sort | uniq -c
+echo "--- upstream:"; grep -o 'up=[^ ]*' $LOG | sort | uniq -c
+awk -F'rt=' '{split($2,a," "); s+=a[1]; n++} END{printf "rata-rata rt gojo: %.4f detik (%d request)\n", s/n, n}' $LOG
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/5077e18a-0eef-4861-a260-a000698783f3" />
+
+**yaga**
+
+```bash
+mariadb -N -e "SELECT COUNT(*) FROM db_shibuya_K50.request_logs;"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/292a3ea9-89f4-4884-a1a0-26265fc42f80" />
+
+#### Nyalakan lagi rate limit (wajib)
+
+**gojo**
+
+```bash
+sed -i 's/^\(\s*\)#limit_req zone=/\1limit_req zone=/' /etc/nginx/sites-available/jujutsu-proxy
+grep -n 'limit_req' /etc/nginx/sites-available/jujutsu-proxy
+nginx -t && nginx -s reload
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/49f8bbdd-52e4-425e-bb44-1c65470a7db7" />
+
+**kusakabe**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" "http://jujutsu.K50.com/api?n=[1-30]" | sort | uniq -c
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/3a209c6d-3479-4f44-ba86-9ac14fb41505" />
+
+#### Simulasi gangguan untuk membedakan jenis kegagalan
+
+Kegagalan aplikasi/upstream (5xx)
+
+**gojo**
+
+```bash
+: > /var/log/nginx/gojo-realip.log
+wc -l < /var/log/nginx/gojo-realip.log
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/962f4642-2c0a-45b8-a26e-5ef6425498fa" />
+
+**geto**
+
+```bash
+service nginx stop
+pgrep -a nginx || echo "nginx geto mati"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/90f8bd91-7963-406d-a67c-f4af046d41f0" />
+
+**kusakabe**
+
+```bash
+ab -n 100 -c 10 http://jujutsu.K50.com/api | egrep 'Complete requests|Failed requests|Non-2xx|Requests per second'
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/b88a97e4-2cd8-4248-9672-287d46ee573a" />
+
+**gojo**
+
+```bash
+LOG=/var/log/nginx/gojo-realip.log
+echo "--- status:"; awk '{print $NF}' $LOG | sort | uniq -c
+echo "--- 502 (kegagalan upstream):"; grep ' 502$' $LOG | head -2
+echo "--- 429 (rate limit):";         grep ' 429$' $LOG | head -2
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/111ac949-864d-45a6-9f9d-1abd3fcce9ec" />
+
+**geto**
+
+```bash
+service nginx start
+sleep 1
+pgrep -a nginx | head -2
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/0fadcbbe-88fd-4210-b4b1-f43fda0516c0" />
+
+#### Kegagalan koneksi (request tidak pernah sampai ke gojo)
+
+**gojo**
+
+```bash
+: > /var/log/nginx/gojo-realip.log
+service nginx stop
+pgrep -a nginx || echo "nginx gojo mati"
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/f45ac702-f489-41b6-aa9d-acfe002451ae" />
+
+**kusakabe**
+
+```bash
+ab -n 20 -c 2 http://jujutsu.K50.com/api
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/c1e573d9-0346-4eae-a672-a8e8a25e2934" />
+
+**gojo**
+
+```bash
+service nginx start
+sleep 1
+pgrep -a nginx | head -2
+wc -l < /var/log/nginx/gojo-realip.log
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/e0ef6302-c00e-4db6-81a9-b70e0e9908eb" />
+
+**kusakabe**
+
+```bash
+curl -s -o /dev/null -w "web : %{http_code}\n" http://jujutsu.K50.com/
+sleep 3
+curl -s -o /dev/null -w "api : %{http_code}\n" http://jujutsu.K50.com/api
+```
+
+<img width="745" height="521" alt="image" src="https://github.com/user-attachments/assets/a786644b-b67d-412f-a4f1-759b0ba65efc" />
 
 ----
 
